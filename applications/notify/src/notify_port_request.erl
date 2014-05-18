@@ -142,7 +142,7 @@ build_and_send_email(TxtBody, HTMLBody, Subject, To, Props, Attachements) when i
     _ = [build_and_send_email(TxtBody, HTMLBody, Subject, T, Props, Attachements) || T <- To],
     'ok';
 build_and_send_email(TxtBody, HTMLBody, Subject, To, Props, Attachements) ->
-    From = props:get_value(<<"send_from">>, Props),
+    From = props:get_value(<<"send_from">>, props:get_value(<<"service">>, Props)),
     %% Content Type, Subtype, Headers, Parameters, Body
     Email = {<<"multipart">>, <<"mixed">>
                  ,[{<<"From">>, From}

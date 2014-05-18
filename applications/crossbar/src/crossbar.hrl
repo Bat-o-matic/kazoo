@@ -72,6 +72,7 @@
                           ,'cb_media'
                           ,'cb_menus'
                           ,'cb_phone_numbers'
+                          ,'cb_port_requests'
                           ,'cb_rates'
                           ,'cb_registrations'
                           ,'cb_schemas'
