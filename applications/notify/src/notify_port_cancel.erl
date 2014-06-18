@@ -43,7 +43,7 @@ init() ->
 %%--------------------------------------------------------------------
 -spec handle_req(wh_json:object(), wh_proplist()) -> 'ok'.
 handle_req(JObj, _Props) ->
-    'true' = wapi_notifications:port_request_v(JObj),
+    'true' = wapi_notifications:port_cancel_v(JObj),
     whapps_util:put_callid(JObj),
 
     lager:debug("an in-progress port has been cancelled, sending email notification"),
@@ -57,15 +57,15 @@ handle_req(JObj, _Props) ->
 
     Props = create_template_props(JObj, AccountJObj),
 
-    CustomTxtTemplate = wh_json:get_value([<<"notifications">>, <<"port_request">>, <<"email_text_template">>], AccountJObj),
+    CustomTxtTemplate = wh_json:get_value([<<"notifications">>, <<"port_cancel">>, <<"email_text_template">>], AccountJObj),
     {'ok', TxtBody} = notify_util:render_template(CustomTxtTemplate, ?DEFAULT_TEXT_TMPL, Props),
     lager:debug("txt body: ~s", [TxtBody]),
 
-    CustomHtmlTemplate = wh_json:get_value([<<"notifications">>, <<"port_request">>, <<"email_html_template">>], AccountJObj),
+    CustomHtmlTemplate = wh_json:get_value([<<"notifications">>, <<"port_cancel">>, <<"email_html_template">>], AccountJObj),
     {'ok', HTMLBody} = notify_util:render_template(CustomHtmlTemplate, ?DEFAULT_HTML_TMPL, Props),
     lager:debug("html body: ~s", [HTMLBody]),
 
-    CustomSubjectTemplate = wh_json:get_value([<<"notifications">>, <<"port_request">>, <<"email_subject_template">>], AccountJObj),
+    CustomSubjectTemplate = wh_json:get_value([<<"notifications">>, <<"port_cancel">>, <<"email_subject_template">>], AccountJObj),
     {'ok', Subject} = notify_util:render_template(CustomSubjectTemplate, ?DEFAULT_SUBJ_TMPL, Props),
     lager:debug("subject: ~s", [Subject]),
 

@@ -1048,7 +1048,7 @@ publish_port_request(API, ContentType) ->
 -spec publish_port_cancel(api_terms(), ne_binary()) -> 'ok'.
 publish_port_cancel(JObj) -> publish_port_cancel(JObj, ?DEFAULT_CONTENT_TYPE).
 publish_port_cancel(API, ContentType) ->
-    {'ok', Payload} = wh_api:prepare_api_payload(API, ?PORT_CANCEL_VALUES, fun ?MODULE:port_request/1),
+    {'ok', Payload} = wh_api:prepare_api_payload(API, ?PORT_CANCEL_VALUES, fun ?MODULE:port_cancel/1),
     amqp_util:notifications_publish(?NOTIFY_PORT_CANCEL, Payload, ContentType).
 
 -spec publish_ported(api_terms()) -> 'ok'.
