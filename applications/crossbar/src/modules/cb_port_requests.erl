@@ -404,7 +404,7 @@ put(Context, Id, ?PORT_PROGRESS) ->
 put(Context, Id, ?PORT_COMPLETE) ->
     post(Context, Id);
 put(Context, Id, ?PORT_REJECT) ->
-    case wh_json:get_value(?PORT_PVT_STATE, cb_context:doc(Context)) of
+    case cb_context:fetch(Context, 'port_state', ?PORT_WAITING) of
         State when State =:= ?PORT_READY orelse State =:= ?PORT_PROGRESS ->
             try send_port_cancel_notification(Context, Id) of
                 _ ->
@@ -754,7 +754,8 @@ maybe_move_state(Id, Context, PortState) ->
         'false' -> Context1;
         {'ok', PortRequest} ->
             lager:debug("loaded new port request state ~s", [PortState]),
-            cb_context:set_doc(Context1, PortRequest);
+            OldState = wh_json:get_value(?PORT_PVT_STATE, cb_context:doc(Context1)),
+            cb_context:set_doc(cb_context:store(Context1, 'port_state', OldState), PortRequest);
         {'error', 'invalid_state_transition'} ->
             cb_context:add_validation_error(<<"port_state">>, <<"enum">>, <<"cannot move to new state from current state">>, Context);
         {'error', _E} ->
