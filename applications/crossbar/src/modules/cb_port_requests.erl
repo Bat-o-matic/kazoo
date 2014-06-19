@@ -404,19 +404,14 @@ put(Context, Id, ?PORT_PROGRESS) ->
 put(Context, Id, ?PORT_COMPLETE) ->
     post(Context, Id);
 put(Context, Id, ?PORT_REJECT) ->
-    case cb_context:fetch(Context, 'port_state', ?PORT_WAITING) of
-        State when State =:= ?PORT_READY orelse State =:= ?PORT_PROGRESS ->
-            try send_port_cancel_notification(Context, Id) of
-                _ ->
-                    lager:debug("port cancel notification sent"),
-                    post(Context, Id)
-            catch
-                _E:_R ->
-                    lager:debug("failed to send the port cancel notification: ~s:~p", [_E, _R]),
-                    cb_context:add_system_error(<<"failed to send port cancel email to system admins">>, Context)
-            end;
+    try send_port_cancel_notification(Context, Id) of
         _ ->
+            lager:debug("port cancel notification sent"),
             post(Context, Id)
+    catch
+        _E:_R ->
+            lager:debug("failed to send the port cancel notification: ~s:~p", [_E, _R]),
+            cb_context:add_system_error(<<"failed to send port cancel email to system admins">>, Context)
     end.
 
 -spec send_port_request_notification(cb_context:context(), ne_binary()) -> 'ok'.
@@ -754,8 +749,7 @@ maybe_move_state(Id, Context, PortState) ->
         'false' -> Context1;
         {'ok', PortRequest} ->
             lager:debug("loaded new port request state ~s", [PortState]),
-            OldState = wh_json:get_value(?PORT_PVT_STATE, cb_context:doc(Context1)),
-            cb_context:set_doc(cb_context:store(Context1, 'port_state', OldState), PortRequest);
+            cb_context:set_doc(Context1, PortRequest);
         {'error', 'invalid_state_transition'} ->
             cb_context:add_validation_error(<<"port_state">>, <<"enum">>, <<"cannot move to new state from current state">>, Context);
         {'error', _E} ->
