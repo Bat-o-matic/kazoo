@@ -35,6 +35,7 @@
 -define(AGG_VIEW_CHILDREN, <<"accounts/listing_by_children">>).
 -define(AGG_VIEW_DESCENDANTS, <<"accounts/listing_by_descendants">>).
 -define(AGG_VIEW_REALM, <<"accounts/listing_by_realm">>).
+-define(AGG_VIEW_NAME, <<"accounts/listing_by_name">>).
 
 -define(PVT_TYPE, <<"account">>).
 -define(CHANNELS, <<"channels">>).
@@ -101,19 +102,26 @@ resource_exists(_, Path) ->
 %% Failure here returns 400
 %% @end
 %%--------------------------------------------------------------------
--spec validate(cb_context:context()) -> cb_context:context().
--spec validate(cb_context:context(), path_token()) -> cb_context:context().
--spec validate(cb_context:context(), path_token(), ne_binary()) -> cb_context:context().
+-spec validate(cb_context:context()) ->
+                      cb_context:context().
+-spec validate(cb_context:context(), path_token()) ->
+                      cb_context:context().
+-spec validate(cb_context:context(), path_token(), ne_binary()) ->
+                      cb_context:context().
 
 validate(Context) ->
     validate_accounts(Context, cb_context:req_verb(Context), cb_context:req_nouns(Context)).
 
+-spec validate_accounts(cb_context:context(), http_method(), req_nouns()) ->
+                               cb_context:context().
 validate_accounts(Context, ?HTTP_PUT, [{?WH_ACCOUNTS_DB, _}]) ->
     validate_request('undefined', prepare_context('undefined', Context)).
 
 validate(Context, AccountId) ->
     validate_account(Context, AccountId, cb_context:req_verb(Context), cb_context:req_nouns(Context)).
 
+-spec validate_account(cb_context:context(), ne_binary(), http_method(), req_nouns()) ->
+                              cb_context:context().
 validate_account(Context, AccountId, ?HTTP_GET, [{?WH_ACCOUNTS_DB, _}]) ->
     load_account(AccountId, prepare_context(AccountId, Context));
 validate_account(Context, _AccountId, ?HTTP_PUT, [{?WH_ACCOUNTS_DB, _}]) ->
@@ -128,6 +136,8 @@ validate_account(Context, AccountId, _Verb, _Nouns) ->
 validate(Context, AccountId, PathToken) ->
     validate_account_path(Context, AccountId, PathToken, cb_context:req_verb(Context)).
 
+-spec validate_account_path(cb_context:context(), ne_binary(), ne_binary(), http_method()) ->
+                                   cb_context:context().
 validate_account_path(Context, AccountId, ?CHANNELS, ?HTTP_GET) ->
     get_channels(AccountId, Context);
 validate_account_path(Context, AccountId, <<"children">>, ?HTTP_GET) ->
@@ -304,11 +314,24 @@ cleanup_leaky_keys(AccountId, Context) ->
 validate_realm_is_unique(AccountId, Context) ->
     Realm = wh_json:get_ne_value(<<"realm">>, cb_context:req_data(Context)),
     case is_unique_realm(AccountId, Realm) of
-        'true' -> validate_account_schema(AccountId, Context);
+        'true' -> validate_account_name_is_unique(AccountId, Context);
         'false' ->
             C = cb_context:add_validation_error([<<"realm">>]
                                                 ,<<"unique">>
                                                 ,<<"Account realm already in use">>
+                                                ,Context),
+            validate_account_name_is_unique(AccountId, C)
+    end.
+
+-spec validate_account_name_is_unique(api_binary(), cb_context:context()) -> cb_context:context().
+validate_account_name_is_unique(AccountId, Context) ->
+    Name = wh_json:get_ne_value(<<"name">>, cb_context:req_data(Context)),
+    case is_unique_account_name(AccountId, Name) of
+        'true' -> validate_account_schema(AccountId, Context);
+        'false' ->
+            C = cb_context:add_validation_error([<<"name">>]
+                                                ,<<"unique">>
+                                                ,<<"Account name already in use">>
                                                 ,Context),
             validate_account_schema(AccountId, C)
     end.
@@ -403,6 +426,7 @@ leak_pvt_allow_additions(Context) ->
     JObj = cb_context:doc(Context),
     RespJObj = cb_context:resp_data(Context),
     AllowAdditions = wh_json:is_true(<<"pvt_wnm_allow_additions">>, JObj, 'false'),
+
     leak_pvt_superduper_admin(
       cb_context:set_resp_data(Context
                                ,wh_json:set_value(<<"wnm_allow_additions">>, AllowAdditions, RespJObj))
@@ -481,8 +505,8 @@ leak_billing_mode(Context) ->
 %%--------------------------------------------------------------------
 -spec load_children(ne_binary(), cb_context:context()) -> cb_context:context().
 load_children(AccountId, Context) ->
-    crossbar_doc:load_view(?AGG_VIEW_CHILDREN, [{<<"startkey">>, [AccountId]}
-                                                ,{<<"endkey">>, [AccountId, wh_json:new()]}
+    crossbar_doc:load_view(?AGG_VIEW_CHILDREN, [{'startkey', [AccountId]}
+                                                ,{'endkey', [AccountId, wh_json:new()]}
                                                ], Context, fun normalize_view_results/2).
 
 %%--------------------------------------------------------------------
@@ -493,8 +517,8 @@ load_children(AccountId, Context) ->
 %%--------------------------------------------------------------------
 -spec load_descendants(ne_binary(), cb_context:context()) -> cb_context:context().
 load_descendants(AccountId, Context) ->
-    crossbar_doc:load_view(?AGG_VIEW_DESCENDANTS, [{<<"startkey">>, [AccountId]}
-                                                   ,{<<"endkey">>, [AccountId, wh_json:new()]}
+    crossbar_doc:load_view(?AGG_VIEW_DESCENDANTS, [{'startkey', [AccountId]}
+                                                   ,{'endkey', [AccountId, wh_json:new()]}
                                                   ], Context, fun normalize_view_results/2).
 
 %%--------------------------------------------------------------------
@@ -505,8 +529,8 @@ load_descendants(AccountId, Context) ->
 %%--------------------------------------------------------------------
 -spec load_siblings(ne_binary(), cb_context:context()) -> cb_context:context().
 load_siblings(AccountId, Context) ->
-    Context1 = crossbar_doc:load_view(?AGG_VIEW_PARENT, [{<<"startkey">>, AccountId}
-                                                         ,{<<"endkey">>, AccountId}
+    Context1 = crossbar_doc:load_view(?AGG_VIEW_PARENT, [{'startkey', AccountId}
+                                                         ,{'endkey', AccountId}
                                                         ], Context),
     case cb_context:resp_status(Context1) of
         'success' ->
@@ -696,6 +720,7 @@ create_new_account_db(Context) ->
             _ = notify_new_account(C),
             _ = wh_services:reconcile(AccountDb),
             _ = create_account_mod(cb_context:account_id(C)),
+            _ = create_first_transaction(cb_context:account_id(C)),
             C
     end.
 
@@ -707,6 +732,11 @@ create_account_mod(AccountId) ->
                                    ,'crossbar'
                                    ,<<"account/cdrs.json">>
                                   ).
+
+-spec create_first_transaction(ne_binary()) -> any().
+create_first_transaction(AccountId) ->
+    AccountMODb = kazoo_modb:get_modb(AccountId),
+    wht_util:rollup(AccountMODb, 0).
 
 -spec ensure_accounts_db_exists() -> 'ok'.
 ensure_accounts_db_exists() ->
@@ -775,12 +805,30 @@ replicate_account_definition(JObj) ->
 %%--------------------------------------------------------------------
 -spec is_unique_realm(api_binary(), ne_binary()) -> boolean().
 is_unique_realm(AccountId, Realm) ->
-    ViewOptions = [{<<"key">>, wh_util:to_lower_binary(Realm)}],
+    ViewOptions = [{'key', wh_util:to_lower_binary(Realm)}],
     case couch_mgr:get_results(?WH_ACCOUNTS_DB, ?AGG_VIEW_REALM, ViewOptions) of
         {'ok', []} -> 'true';
         {'ok', [JObj]} -> wh_json:get_value(<<"id">>, JObj) =:= AccountId;
         {'error', 'not_found'} -> 'true';
         _Else -> 'false'
+    end.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% This function will determine if the account name is unique
+%% @end
+%%--------------------------------------------------------------------
+-spec is_unique_account_name(ne_binary(), ne_binary()) -> boolean().
+is_unique_account_name(AccountId, Name) ->
+    ViewOptions = [{'key', Name}],
+    case couch_mgr:get_results(?WH_ACCOUNTS_DB, ?AGG_VIEW_NAME, ViewOptions) of
+        {'ok', []} -> 'true';
+        {'error', 'not_found'} -> 'true';
+        {'ok', [JObj|_]} -> wh_json:get_value(<<"id">>, JObj) =:= AccountId;
+        _Else ->
+            lager:error("error ~p checking view ~p in ~p", [_Else, ?AGG_VIEW_NAME, ?WH_ACCOUNTS_DB]),
+            'false'
     end.
 
 %%--------------------------------------------------------------------

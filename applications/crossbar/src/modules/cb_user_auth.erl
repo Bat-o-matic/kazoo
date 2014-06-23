@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @copyright (C) 2011-2013, 2600Hz
+%%% @copyright (C) 2011-2014, 2600Hz
 %%% @doc
 %%% User auth module
 %%% @end
@@ -24,6 +24,7 @@
 -define(ACCT_SHA1_LIST, <<"users/creds_by_sha">>).
 -define(USERNAME_LIST, <<"users/list_by_username">>).
 -define(DEFAULT_LANGUAGE, <<"en-US">>).
+-define(USER_AUTH_TOKENS, whapps_config:get_integer(?CONFIG_CAT, <<"user_auth_tokens">>, 35)).
 
 %%%===================================================================
 %%% API
@@ -88,7 +89,7 @@ authenticate(Context) ->
 
 authenticate_nouns([{<<"user_auth">>, _}]) -> 'true';
 authenticate_nouns([{<<"user_auth">>, [<<"recovery">>]}]) -> 'true';
-authenticate_nouns(_) -> 'false'.
+authenticate_nouns(_Nouns) -> 'false'.
 
 %%--------------------------------------------------------------------
 %% @public
@@ -102,7 +103,12 @@ authenticate_nouns(_) -> 'false'.
 -spec validate(cb_context:context()) -> cb_context:context().
 -spec validate(cb_context:context(), path_token()) -> cb_context:context().
 validate(Context) ->
-    cb_context:validate_request_data(<<"user_auth">>, Context, fun maybe_authenticate_user/1).
+    Context1 = consume_tokens(Context),
+    case cb_context:resp_status(Context1) of
+        'success' ->
+            cb_context:validate_request_data(<<"user_auth">>, Context, fun maybe_authenticate_user/1);
+        _Status -> Context1
+    end.
 
 validate(Context, <<"recovery">>) ->
     cb_context:validate_request_data(<<"user_auth_recovery">>, Context, fun maybe_recover_user_password/1).
@@ -130,10 +136,8 @@ put(Context, <<"recovery">>) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec normalize_account_name(api_binary()) -> api_binary().
-normalize_account_name('undefined') -> 'undefined';
 normalize_account_name(AccountName) ->
-    << <<Char>> || <<Char>> <= wh_util:to_lower_binary(AccountName)
-                   ,(Char >= $a andalso Char =< $z) orelse (Char >= $0 andalso Char =< $9) >>.
+    wh_util:normalize_account_name(AccountName).
 
 %%--------------------------------------------------------------------
 %% @private
@@ -197,10 +201,12 @@ maybe_authenticate_user(Context, Credentials, <<"sha">>, Account) ->
         'success' -> load_sha1_results(Context1, cb_context:doc(Context1));
         _Status ->
             lager:debug("credentials do not belong to any user"),
+
             cb_context:add_system_error('invalid_credentials', Context)
     end;
 maybe_authenticate_user(Context, _, _, _) ->
     lager:debug("invalid creds"),
+
     cb_context:add_system_error('invalid_credentials', Context).
 
 -spec maybe_account_is_enabled(cb_context:context(), ne_binary(), ne_binary(), wh_json:key() | wh_json:keys()) ->
@@ -321,8 +327,7 @@ create_token(Context) ->
                 {'ok', Doc} ->
                     AuthToken = wh_json:get_value(<<"_id">>, Doc),
                     lager:debug("created new local auth token ~s", [AuthToken]),
-                    JObj1 = populate_resp(JObj, AccountId, OwnerId),
-                    crossbar_util:response(crossbar_util:response_auth(JObj1)
+                    crossbar_util:response(crossbar_util:response_auth(JObj, AccountId, OwnerId)
                                            ,cb_context:setters(Context, [{fun cb_context:set_auth_token/2, AuthToken}
                                                                          ,{fun cb_context:set_auth_doc/2, Doc}
                                                                         ])
@@ -332,56 +337,6 @@ create_token(Context) ->
                     cb_context:add_system_error('invalid_credentials', Context)
             end
     end.
-
--spec populate_resp(wh_json:object(), ne_binary(), ne_binary()) -> wh_json:object().
-populate_resp(JObj, AccountId, UserId) ->
-    Routines = [fun(J) -> wh_json:set_value(<<"apps">>, load_apps(AccountId, UserId), J) end
-                ,fun(J) -> wh_json:set_value(<<"language">>, get_language(AccountId, UserId), J) end
-               ],
-    lists:foldl(fun(F, J) -> F(J) end, JObj, Routines).
-
--spec load_apps(ne_binary(), ne_binary()) -> api_object().
-load_apps(AccountId, UserId) ->
-    MasterAccountDb = get_master_account_db(),
-    Lang = get_language(AccountId, UserId),
-    case couch_mgr:get_all_results(MasterAccountDb, <<"apps_store/crossbar_listing">>) of
-        {'error', _E} ->
-            lager:error("failed to load lookup apps in ~p", [MasterAccountDb]),
-            'undefined';
-        {'ok', JObjs} -> filter_apps(JObjs, Lang)
-    end.
-
--spec filter_apps(wh_json:objects(), ne_binary()) -> wh_json:objects().
--spec filter_apps(wh_json:objects(), ne_binary(), wh_json:objects()) -> wh_json:objects().
-filter_apps(JObjs, Lang) ->
-    filter_apps(JObjs, Lang, []).
-
-filter_apps([], _, Acc) -> Acc;
-filter_apps([JObj|JObjs], Lang, Acc) ->
-    App = wh_json:get_value(<<"value">>, JObj, wh_json:new()),
-    DefaultLabel = wh_json:get_value([<<"i18n">>, ?DEFAULT_LANGUAGE, <<"label">>], App),
-    NewApp = wh_json:from_list([{<<"id">>, wh_json:get_value(<<"id">>, App)}
-                                ,{<<"name">>, wh_json:get_value(<<"name">>, App)}
-                                ,{<<"api_url">>, wh_json:get_value(<<"api_url">>, App)}
-                                ,{<<"label">>, wh_json:get_value([<<"i18n">>, Lang, <<"label">>], App, DefaultLabel)}
-                               ]),
-    filter_apps(JObjs, Lang, [NewApp|Acc]).
-
--spec get_language(ne_binary(), ne_binary()) -> ne_binary().
-get_language(AccountId, UserId) ->
-    case crossbar_util:get_user_lang(AccountId, UserId) of
-        {'ok', Lang} -> Lang;
-        'error' ->
-            case crossbar_util:get_account_lang(AccountId) of
-                {'ok', Lang} -> Lang;
-                'error' -> ?DEFAULT_LANGUAGE
-            end
-    end.
-
--spec get_master_account_db() -> ne_binary().
-get_master_account_db() ->
-    {'ok', MasterAccountId} = whapps_util:get_master_account_id(),
-    wh_util:format_account_id(MasterAccountId, 'encoded').
 
 %%--------------------------------------------------------------------
 %% @private
@@ -489,4 +444,15 @@ find_account(PhoneNumber, AccountRealm, AccountName, Context) ->
                                                 ,<<"The provided phone number could not be found">>
                                                 ,Context),
             find_account('undefined', AccountRealm, AccountName, C)
+    end.
+
+-spec consume_tokens(cb_context:context()) -> cb_context:context().
+consume_tokens(Context) ->
+    case kz_buckets:consume_tokens_until(cb_modules_util:bucket_name(Context)
+                                         ,?USER_AUTH_TOKENS
+                                        )
+    of
+        'true' -> cb_context:set_resp_status(Context, 'success');
+        'false' ->
+            cb_context:add_system_error('too_many_requests', Context)
     end.

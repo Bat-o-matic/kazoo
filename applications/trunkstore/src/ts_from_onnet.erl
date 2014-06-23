@@ -51,7 +51,8 @@ maybe_onnet_data(State) ->
         end,
     SrvOptions = wh_json:get_value([<<"server">>, <<"options">>], Options, wh_json:new()),
     case wnm_util:is_reconcilable(ToDID)
-         orelse wh_json:is_true(<<"hunt_non_reconcilable">>, SrvOptions, 'false')
+        orelse wh_json:is_true(<<"hunt_non_reconcilable">>, SrvOptions, 'false')
+        orelse whapps_config:get_is_true(?TS_CONFIG_CAT, <<"default_hunt_non_reconcilable">>, 'false')
     of
         'false' ->
             lager:debug("number ~p is non_reconcilable and the server does not allow it", [ToDID]);
@@ -152,7 +153,13 @@ wait_for_win(State, Command) ->
     case ts_callflow:wait_for_win(State) of
         {'lost', _} -> 'normal';
         {'won', State1} ->
-            send_offnet(State1, Command)
+            case ts_util:maybe_restrict_call(State1, Command) of
+                'true' ->
+                      lager:debug("Trunkstore call to ~p restricted", [props:get_value(<<"To-DID">>, Command)]),
+                      ts_callflow:send_hangup(State1, <<"403">>);
+                 _ ->
+                      send_offnet(State1, Command)
+            end
     end.
 
 send_offnet(State, Command) ->

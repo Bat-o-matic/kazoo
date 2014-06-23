@@ -15,6 +15,8 @@
                  ,module_name :: atom()
                  ,module_data = wh_json:new() :: wh_json:object()
                  ,features = sets:new() :: set()
+                 ,feature_activation_charges = 0 :: number()
+                 ,phone_number_activation_charges = 0 :: number()
                  ,current_features = sets:new() :: set()
                  ,number_doc = wh_json:new() :: wh_json:object()
                  ,current_number_doc = wh_json:new() :: wh_json:object()
@@ -27,6 +29,7 @@
                  ,billing_id :: api_binary()
                  ,used_by = <<>> :: binary()
                  ,dry_run = 'false' :: boolean()
+                 ,is_new = 'false' :: boolean()
                 }).
 
 -type wnm_number() :: #number{}.

@@ -74,7 +74,9 @@
 -type context() :: #cb_context{}.
 -type setter_fun_2() :: fun((context(), term()) -> context()).
 -type setter_fun_3() :: fun((context(), term(), term()) -> context()).
+-type setter_fun() :: setter_fun_2() | setter_fun_3().
 -export_type([context/0
+              ,setter_fun/0
               ,setter_fun_2/0
               ,setter_fun_3/0
              ]).
@@ -129,7 +131,7 @@ method(#cb_context{method=M}) -> M.
 
 -spec path_tokens(context()) -> ne_binaries().
 path_tokens(#cb_context{raw_path=Path}) ->
-    [cowboy_http:urldecode(Token) || Token <- binary:split(Path, <<"/">>, ['global', 'trim'])].
+    [cow_qs:urldecode(Token) || Token <- binary:split(Path, <<"/">>, ['global', 'trim'])].
 
 -spec magic_pathed(context()) -> boolean().
 magic_pathed(#cb_context{magic_pathed=MP}) -> MP.
@@ -519,6 +521,9 @@ add_validation_error(Property, <<"date_range">> = C, Message, Context) ->
     add_depreciated_validation_error(Property, C, Message, Context);
 %% Value was required to locate a resource, but failed (like account_name)
 add_validation_error(Property, <<"not_found">> = C, Message, Context) ->
+    add_depreciated_validation_error(Property, C, Message, Context);
+%% Value's keys didn't match property
+add_validation_error(Property, <<"patternProperties">> = C, Message, Context) ->
     add_depreciated_validation_error(Property, C, Message, Context);
 
 add_validation_error(Property, Code, Message, Context) ->

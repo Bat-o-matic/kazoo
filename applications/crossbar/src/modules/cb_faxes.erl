@@ -18,7 +18,6 @@
          ,put/1, put/2
          ,post/1, post/3
          ,delete/3
-        ,get_delivered_date/1
         ]).
 
 -include("../crossbar.hrl").
@@ -28,12 +27,18 @@
 
 -define(ATTACHMENT, <<"attachment">>).
 
--define(CB_LIST, <<"media/listing_private_media">>).
+-define(CB_LIST_ALL, <<"faxes/crossbar_listing">>).
+-define(CB_LIST_BY_FAXBOX, <<"faxes/list_by_faxbox">>).
+-define(CB_LIST_BY_OWNERID, <<"faxes/list_by_ownerid">>).
+-define(CB_LIST_BY_ACCOUNT, <<"faxes/list_by_account">>).
+
+
 -define(FAX_FILE_TYPE, <<"tiff">>).
 
--define(OUTGOING_FAX_DOC_MAP, [{<<"created">>,<<"pvt_created">>},
-                               {<<"delivered">>, fun get_delivered_date/1}
-                               ]).
+-define(OUTGOING_FAX_DOC_MAP, [{<<"created">>, <<"pvt_created">>}
+                               ,{<<"delivered">>, fun get_delivered_date/1}
+                               ,{<<"status">>, fun get_execution_status/2}
+                              ]).
 
 %%%===================================================================
 %%% API
@@ -111,12 +116,15 @@ resource_exists(?INCOMING, _Id, ?ATTACHMENT) -> 'true'.
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec content_types_provided(cb_context:context(), path_token(), path_token(), path_token()) -> cb_context:context().
+-spec content_types_provided(cb_context:context(), path_token(), path_token(), path_token()) ->
+                                    cb_context:context().
 content_types_provided(Context, ?INCOMING, FaxId, ?ATTACHMENT) ->
     content_types_provided_for_fax(Context, FaxId, cb_context:req_verb(Context));
 content_types_provided(Context, _, _, _) ->
     Context.
 
+-spec content_types_provided_for_fax(cb_context:context(), ne_binary(), http_method()) ->
+                                            cb_context:context().
 content_types_provided_for_fax(Context, FaxId, ?HTTP_GET) ->
     Context1 = load_fax_meta(FaxId, Context),
     case cb_context:resp_status(Context1) of
@@ -175,7 +183,6 @@ validate_outgoing_fax(Context, Id, ?HTTP_DELETE) ->
 
 validate(Context, ?INCOMING, Id, ?ATTACHMENT) ->
     load_fax_binary(Id, Context).
-
 
 %%--------------------------------------------------------------------
 %% @public
@@ -244,8 +251,7 @@ load_outgoing_fax_doc(Id, Context) ->
     Ctx = read(Id, Context),
     crossbar_util:apply_response_map(Ctx, ?OUTGOING_FAX_DOC_MAP).
 
-
--spec get_delivered_date(wh_json:object()) -> any().
+-spec get_delivered_date(wh_json:object()) -> api_integer().
 get_delivered_date(JObj) ->
     case wh_json:get_value(<<"pvt_delivered_date">>, JObj) of
         'undefined' ->
@@ -254,6 +260,29 @@ get_delivered_date(JObj) ->
                 _ -> 'undefined'
             end;
         Date -> Date
+    end.
+
+-spec get_execution_status(ne_binary(), wh_json:object()) -> api_binary().
+get_execution_status(Id, JObj) ->
+    case wh_json:get_value(<<"pvt_job_status">>, JObj) of
+        <<"processing">> = S ->
+            case wh_json:get_value(<<"pvt_queue">>, JObj) of
+                'undefined' -> S;
+                Q -> get_fax_running_status(Id, Q)
+            end;
+        Status -> Status
+    end.
+
+-spec get_fax_running_status(ne_binary(), ne_binary()) -> ne_binary().
+get_fax_running_status(Id, Q) ->
+    Api = [{<<"Job-ID">>, Id} | wh_api:default_headers(?APP_NAME, ?APP_VERSION)],
+    case whapps_util:amqp_pool_request(Api
+                                       ,fun(A) -> wapi_fax:publish_query_status(Q, A) end
+                                       ,fun wapi_fax:status_v/1
+                                      )
+    of
+        {'ok', JObj } -> wh_json:get_value(<<"Status">>, JObj);
+        _ -> <<"not available">>
     end.
 
 %%--------------------------------------------------------------------
@@ -287,11 +316,11 @@ update(Id, Context) ->
 -spec on_successful_validation(api_binary(), cb_context:context()) -> cb_context:context().
 on_successful_validation('undefined', Context) ->
     AccountId = cb_context:account_id(Context),
-    AccountDb = wh_util:format_account_id(AccountId, 'encoded'),
+    AccountDb = cb_context:account_db(Context),
     AuthDoc = cb_context:auth_doc(Context),
     OwnerId = wh_json:get_value(<<"owner_id">>, AuthDoc),
     Timezone = crossbar_util:get_user_timezone(AccountId, OwnerId),
-			
+
     cb_context:set_doc(Context
                        ,wh_json:set_values([{<<"pvt_type">>, <<"fax">>}
                                             ,{<<"pvt_job_status">>, <<"pending">>}
@@ -299,11 +328,14 @@ on_successful_validation('undefined', Context) ->
                                             ,{<<"pvt_account_id">>, AccountId}
                                             ,{<<"pvt_account_db">>, AccountDb}
                                             ,{<<"fax_timezone">>, Timezone}
-                                           ], cb_context:doc(Context))
+                                           ]
+                                           ,cb_context:doc(Context)
+                                          )
                        );
 on_successful_validation(DocId, Context) ->
     maybe_reset_job(crossbar_doc:load_merge(DocId, Context), cb_context:resp_status(Context)).
 
+-spec maybe_reset_job(cb_context:context(), crossbar_status()) -> cb_context:context().
 maybe_reset_job(Context, 'success') ->
     JObj = cb_context:doc(Context),
     case wh_json:get_value(<<"pvt_job_status">>, JObj) of
@@ -312,7 +344,9 @@ maybe_reset_job(Context, 'success') ->
             cb_context:set_doc(Context
                                ,wh_json:set_values([{<<"pvt_job_status">>, <<"pending">>}
                                                     ,{<<"attempts">>, 0}
-                                                   ], JObj))
+                                                   ]
+                                                   ,JObj
+                                                  ))
     end;
 maybe_reset_job(Context, _Status) -> Context.
 
@@ -325,11 +359,27 @@ maybe_reset_job(Context, _Status) -> Context.
 %%--------------------------------------------------------------------
 -spec incoming_summary(cb_context:context()) -> cb_context:context().
 incoming_summary(Context) ->
-    crossbar_doc:load_view(?CB_LIST
-                           ,[{'startkey', [?FAX_FILE_TYPE]}
-                             ,{'endkey', [?FAX_FILE_TYPE, wh_json:new()]}
-                             ,'include_docs'
-                            ]
+    JObj = cb_context:doc(Context),
+    {View, ViewOptions} =
+        case wh_json:get_value(<<"pvt_type">>, JObj) of
+            <<"faxbox">> ->
+                {?CB_LIST_BY_FAXBOX
+                 ,[{'key', wh_json:get_value(<<"_id">>, JObj)}
+                   ,'include_docs'
+                  ]};
+            <<"user">> ->
+                {?CB_LIST_BY_OWNERID
+                 ,[{'key', wh_json:get_value(<<"_id">>, JObj)}
+                   ,'include_docs'
+                  ]};
+            _Else ->
+                {?CB_LIST_ALL
+                 ,[{'key', cb_context:account_id(Context)}
+                   ,'include_docs'
+                  ]}
+        end,
+    crossbar_doc:load_view(View
+                           ,ViewOptions
                            ,Context
                            ,fun normalize_incoming_view_results/2
                           ).
@@ -372,10 +422,22 @@ load_fax_binary(FaxId, Context) ->
 %%--------------------------------------------------------------------
 -spec outgoing_summary(cb_context:context()) -> cb_context:context().
 outgoing_summary(Context) ->
-    ViewOptions=[{'key', cb_context:account_id(Context)}
-                 ,'include_docs'
-                ],
-    crossbar_doc:load_view(<<"faxes/crossbar_listing">>
+    JObj = cb_context:doc(Context),
+    {View, ViewOptions} =
+        case wh_json:get_value(<<"pvt_type">>, JObj) of
+            <<"faxbox">> ->
+                {?CB_LIST_BY_ACCOUNT
+                 ,[{'key', wh_json:get_value(<<"_id">>, JObj)}
+                   ,'include_docs'
+                  ]};
+            _Else ->
+                {?CB_LIST_BY_FAXBOX
+                 ,[{'key', cb_context:account_id(Context)}
+                   ,'include_docs'
+                  ]}
+        end,
+
+    crossbar_doc:load_view(View
                            ,ViewOptions
                            ,Context
                            ,fun normalize_view_results/2

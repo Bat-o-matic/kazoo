@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @copyright (C) 2011-2013, 2600Hz
+%%% @copyright (C) 2011-2014, 2600Hz
 %%% @doc
 %%%
 %%% @end
@@ -10,6 +10,7 @@
 -module(cf_util).
 
 -include("callflow.hrl").
+-include_lib("whistle/src/wh_json.hrl").
 
 -define(OWNER_KEY(Db, User), {?MODULE, 'owner_id', Db, User}).
 -define(CF_FLOW_CACHE_KEY(Number, Db), {'cf_flow', Number, Db}).
@@ -21,7 +22,9 @@
 
 -define(ENCRYPTION_MAP, [{<<"srtp">>, [{<<"RTP-Secure-Media">>, <<"true">>}]}
                         ,{<<"zrtp">>, [{<<"ZRTP-Secure-Media">>, <<"true">>}
-                                      ,{<<"ZRTP-Enrollment">>, <<"true">>}]}]).
+                                       ,{<<"ZRTP-Enrollment">>, <<"true">>}
+                                      ]}
+                        ]).
 
 -export([presence_probe/2]).
 -export([presence_mwi_query/2]).
@@ -38,6 +41,15 @@
 -export([owner_ids_by_sip_username/2]).
 -export([apply_dialplan/2]).
 -export([encryption_method_map/2]).
+-export([maybe_start_metaflows/2]).
+
+-export([caller_belongs_to_group/2
+         ,caller_belongs_to_user/2
+         ,find_endpoints/3
+         ,find_channels/2
+         ,find_user_endpoints/3
+         ,find_group_endpoints/2
+        ]).
 
 %%--------------------------------------------------------------------
 %% @public
@@ -234,15 +246,8 @@ ignore_early_media(Endpoints) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec correct_media_path(api_binary(), whapps_call:call()) -> api_binary().
-correct_media_path('undefined', _) -> 'undefined';
-correct_media_path(<<>>, _) -> 'undefined';
-correct_media_path(<<"silence_stream://", _/binary>> = Media, _) -> Media;
-correct_media_path(<<"tone_stream://", _/binary>> = Media, _) -> Media;
 correct_media_path(Media, Call) ->
-    case binary:match(Media, <<"/">>) of
-        'nomatch' -> <<$/, (whapps_call:account_id(Call))/binary, $/, Media/binary>>;
-        _Else -> Media
-    end.
+    wh_media_util:media_path(Media, Call).
 
 %%--------------------------------------------------------------------
 %% @public
@@ -745,7 +750,7 @@ maybe_apply_dialplan([Regex|Regexs], DialPlan, Number) ->
     case re:run(Number, Regex, [{'capture', 'all', 'binary'}]) of
         'nomatch' ->
             maybe_apply_dialplan(Regexs, DialPlan, Number);
-        'match' -> 
+        'match' ->
             Number;
         {'match', Captures} ->
             Root = lists:last(Captures),
@@ -754,7 +759,7 @@ maybe_apply_dialplan([Regex|Regexs], DialPlan, Number) ->
             <<Prefix/binary, Root/binary, Suffix/binary>>
     end.
 
--spec encryption_method_map(api_object(), api_binaries()) -> api_object().
+-spec encryption_method_map(api_object(), api_binaries() | wh_json:object()) -> api_object().
 encryption_method_map(JObj, []) -> JObj;
 encryption_method_map(JObj, [Method|Methods]) ->
     case props:get_value(Method, ?ENCRYPTION_MAP, []) of
@@ -769,6 +774,90 @@ encryption_method_map(JObj, Endpoint) ->
                           ,<<"encryption">>
                           ,<<"methods">>
                          ], Endpoint, [])).
+
+-spec maybe_start_metaflows(whapps_call:call(), wh_json:objects()) -> 'ok'.
+-spec maybe_start_metaflow(whapps_call:call(), wh_json:object()) -> 'ok'.
+
+maybe_start_metaflows(Call, Endpoints) ->
+    [maybe_start_metaflow(Call, Endpoint) || Endpoint <- Endpoints],
+    'ok'.
+
+maybe_start_metaflow(Call, Endpoint) ->
+    case wh_json:get_value(<<"Metaflows">>, Endpoint) of
+        'undefined' -> 'ok';
+        ?EMPTY_JSON_OBJECT -> 'ok';
+        JObj ->
+            API = props:filter_undefined(
+                    [{<<"Endpoint-ID">>, wh_json:get_value(<<"Endpoint-ID">>, Endpoint)}
+                     ,{<<"Call">>, whapps_call:to_json(Call)}
+                     ,{<<"Numbers">>, wh_json:get_value(<<"numbers">>, JObj)}
+                     ,{<<"Patterns">>, wh_json:get_value(<<"patterns">>, JObj)}
+                     ,{<<"Binding-Digit">>, wh_json:get_value(<<"binding_digit">>, JObj)}
+                     ,{<<"Digit-Timeout">>, wh_json:get_value(<<"digit_timeout">>, JObj)}
+                     ,{<<"Listen-On">>, wh_json:get_value(<<"listen_on">>, JObj, <<"b">>)}
+                     | wh_api:default_headers(?APP_NAME, ?APP_VERSION)
+                    ]),
+            lager:debug("sending metaflow for endpoint: ~s: ~p", [wh_json:get_value(<<"Endpoint-ID">>, Endpoint), wh_json:get_value(<<"listen_on">>, JObj)]),
+            whapps_util:amqp_pool_send(API, fun wapi_dialplan:publish_metaflow/1)
+    end.
+
+-spec caller_belongs_to_group(ne_binary(), whapps_call:call()) -> boolean().
+caller_belongs_to_group(GroupId, Call) ->
+    lists:member(whapps_call:authorizing_id(Call), find_group_endpoints(GroupId, Call)).
+
+-spec caller_belongs_to_user(ne_binary(), whapps_call:call()) -> boolean().
+caller_belongs_to_user(UserId, Call) ->
+    lists:member(whapps_call:authorizing_id(Call), find_user_endpoints([UserId],[],Call)).
+
+-spec find_group_endpoints(ne_binary(), whapps_call:call()) -> ne_binaries().
+find_group_endpoints(GroupId, Call) ->
+    GroupsJObj = cf_attributes:groups(Call),
+    case [wh_json:get_value(<<"value">>, JObj)
+          || JObj <- GroupsJObj,
+             wh_json:get_value(<<"id">>, JObj) =:= GroupId
+         ]
+    of
+        [] -> [];
+        [GroupEndpoints] ->
+            Ids = wh_json:get_keys(GroupEndpoints),
+            find_endpoints(Ids, GroupEndpoints, Call)
+    end.
+
+-spec find_endpoints(ne_binaries(), wh_json:object(), whapps_call:call()) ->
+                            ne_binaries().
+find_endpoints(Ids, GroupEndpoints, Call) ->
+    {DeviceIds, UserIds} =
+        lists:partition(fun(Id) ->
+                                wh_json:get_value([Id, <<"type">>], GroupEndpoints) =:= <<"device">>
+                        end, Ids),
+    find_user_endpoints(UserIds, lists:sort(DeviceIds), Call).
+
+-spec find_user_endpoints(ne_binaries(), ne_binaries(), whapps_call:call()) ->
+                                 ne_binaries().
+find_user_endpoints([], DeviceIds, _) -> DeviceIds;
+find_user_endpoints(UserIds, DeviceIds, Call) ->
+    UserDeviceIds = cf_attributes:owned_by(UserIds, <<"device">>, Call),
+    lists:merge(lists:sort(UserDeviceIds), DeviceIds).
+
+-spec find_channels(ne_binaries(), whapps_call:call()) -> wh_json:objects().
+find_channels(Usernames, Call) ->
+    Realm = wh_util:get_account_realm(whapps_call:account_id(Call)),
+    lager:debug("finding channels for realm ~s, usernames ~p", [Realm, Usernames]),
+    Req = [{<<"Realm">>, Realm}
+           ,{<<"Usernames">>, Usernames}
+           | wh_api:default_headers(?APP_NAME, ?APP_VERSION)
+          ],
+    case whapps_util:amqp_pool_request(Req
+                                       ,fun wapi_call:publish_query_user_channels_req/1
+                                       ,fun wapi_call:query_user_channels_resp_v/1
+                                      )
+    of
+        {'ok', Resp} -> wh_json:get_value(<<"Channels">>, Resp, []);
+        {'error', _E} ->
+            lager:debug("failed to get channels: ~p", [_E]),
+            []
+    end.
+
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

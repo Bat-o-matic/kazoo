@@ -46,6 +46,7 @@
                                        ,<<"FreeSWITCH-Nodename">>
                                        ,<<"Network-IP">>, <<"Network-Port">>
                                        ,<<"Suppress-Unregister-Notify">>
+                                       ,<<"Original-Contact">>
                                       ]).
 -define(REG_SUCCESS_VALUES, [{<<"Event-Category">>, <<"directory">>}
                              ,{<<"Event-Name">>, <<"reg_success">>}
@@ -200,7 +201,7 @@ query_err_v(JObj) -> query_err_v(wh_json:to_proplist(JObj)).
 %%--------------------------------------------------------------------
 -spec bind_q(ne_binary(), wh_proplist()) -> 'ok'.
 bind_q(Q, Props) ->
-    bind_q(Q, props:get_value('retrict_to', Props), Props).
+    bind_q(Q, props:get_value('restrict_to', Props), Props).
 
 bind_q(Q, 'undefined', Props) ->
     _ = amqp_util:bind_q_to_callmgr(Q, get_success_binding(Props)),
@@ -220,7 +221,7 @@ bind_q(_, [], _) -> 'ok'.
 
 -spec unbind_q(ne_binary(), wh_proplist()) -> 'ok'.
 unbind_q(Q, Props) ->
-    unbind_q(Q, props:get_value('retrict_to', Props), Props).
+    unbind_q(Q, props:get_value('restrict_to', Props), Props).
 
 unbind_q(Q, 'undefined', Props) ->
     _ = amqp_util:unbind_q_from_callmgr(Q, get_success_binding(Props)),

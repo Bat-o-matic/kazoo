@@ -23,12 +23,70 @@
 
 -export([get_all_account_views/0]).
 
+-export([cleanup_voicemail_media/1]).
+
+
 -define(DEVICES_CB_LIST, <<"devices/crossbar_listing">>).
 -define(MAINTENANCE_VIEW_FILE, <<"views/maintenance.json">>).
 -define(RESELLER_VIEW_FILE, <<"views/reseller.json">>).
 -define(FAXES_VIEW_FILE, <<"views/faxes.json">>).
+-define(FAXBOX_VIEW_FILE, <<"views/faxbox.json">>).
 -define(ACCOUNTS_AGG_VIEW_FILE, <<"views/accounts.json">>).
 -define(ACCOUNTS_AGG_NOTIFY_VIEW_FILE, <<"views/notify.json">>).
+
+-define(VMBOX_VIEW, <<"vmboxes/crossbar_listing">>).
+-define(PMEDIA_VIEW, <<"media/listing_private_media">>).
+
+%%--------------------------------------------------------------------
+%% @public
+%% @doc
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec cleanup_voicemail_media(ne_binary()) -> {'ok', wh_json:objects()} | {'error', any()}.
+cleanup_voicemail_media(Account) ->
+    AccountDb = wh_util:format_account_id(Account, 'encoded'),
+    Medias = get_medias(Account),
+    Messages = get_messages(Account),
+    ExtraMedia = lists:subtract(Medias, Messages),
+    case couch_mgr:del_docs(AccountDb, ExtraMedia) of
+        {'ok', _}=Res -> Res;
+        {'error', _E}=Err ->
+            lager:error("could not delete docs ~p: ~p", [ExtraMedia, _E]),
+            Err
+    end.
+
+-spec get_messages(ne_binary()) -> ne_binaries().
+get_messages(Account) ->
+    AccountDb = wh_util:format_account_id(Account, 'encoded'),
+    ViewOptions = ['include_docs'],
+    case couch_mgr:get_results(AccountDb, ?VMBOX_VIEW, ViewOptions) of
+        {'ok', ViewRes} ->
+            lists:foldl(fun extract_messages/2, [], ViewRes);
+        {'error', _E} ->
+            lager:error("coumd not load view ~p: ~p", [?VMBOX_VIEW, _E]),
+            []
+    end.
+
+-spec extract_messages(wh_json:objects() | wh_json:object(), ne_binaries()) -> ne_binaries().
+extract_messages([], CurMessages) -> CurMessages;
+extract_messages([Mess|Messages], CurMessages) ->
+    extract_messages(Messages, [wh_json:get_value(<<"media_id">>, Mess)|CurMessages]);
+extract_messages(JObj, CurMessages) ->
+    Messages = wh_json:get_value([<<"doc">>, <<"messages">>], JObj, []),
+    extract_messages(Messages, CurMessages).
+
+-spec get_medias(ne_binary()) -> ne_binaries().
+get_medias(Account) ->
+    AccountDb = wh_util:format_account_id(Account, 'encoded'),
+    ViewOptions = [],
+    case couch_mgr:get_results(AccountDb, ?PMEDIA_VIEW, ViewOptions) of
+        {'ok', ViewRes} ->
+            [wh_json:get_value(<<"id">>, JObj) || JObj<- ViewRes];
+        {'error', _E} ->
+            lager:error("coumd not load view ~p: ~p", [?PMEDIA_VIEW, _E]),
+            []
+    end.
 
 %%--------------------------------------------------------------------
 %% @public
@@ -50,6 +108,9 @@ migrate() ->
 
     %% Create missing limits doc
     _ = migrate_limits(),
+
+    %% Migrate Faxes with private_media to fax
+    _ = migrate_faxes(),
 
     %% Ensure the phone_numbers doc in the account db is up-to-date
     _ = whistle_number_manager_maintenance:reconcile_numbers(),
@@ -76,7 +137,6 @@ migrate() ->
     %% Remove depreciated whapps from the startup list and add new defaults
     io:format("updating default kazoo modules~n", []),
     WhappsUpdates = [fun(L) -> [<<"sysconf">> | lists:delete(<<"sysconf">>, L)] end
-                     ,fun(L) -> [<<"acdc">> | lists:delete(<<"acdc">>, L)] end
                      ,fun(L) -> [<<"reorder">> | lists:delete(<<"reorder">>, L)] end
                      ,fun(L) -> [<<"omnipresence">> | lists:delete(<<"omnipresence">>, L)] end
                     ],
@@ -213,7 +273,8 @@ refresh(?WH_PROVISIONER_DB) ->
     'ok';
 refresh(?WH_FAXES) ->
     couch_mgr:db_create(?WH_FAXES),
-    _ = couch_mgr:revise_doc_from_file(?WH_FAXES, 'whistle_apps', ?FAXES_VIEW_FILE),
+    _ = couch_mgr:revise_doc_from_file(?WH_FAXES, 'fax', ?FAXES_VIEW_FILE),
+    _ = couch_mgr:revise_doc_from_file(?WH_FAXES, 'fax', ?FAXBOX_VIEW_FILE),
     'ok';
 refresh(?KZ_PORT_REQUESTS_DB) ->
     couch_mgr:db_create(?KZ_PORT_REQUESTS_DB),
@@ -224,7 +285,11 @@ refresh(?KZ_ACDC_DB) ->
     _ = couch_mgr:revise_doc_from_file(?KZ_ACDC_DB, 'crossbar', <<"views/acdc.json">>),
     'ok';
 refresh(Account) when is_binary(Account) ->
-    refresh(Account, get_all_account_views());
+    case whapps_util:is_account_db(Account) of
+        'true' -> refresh(Account, get_all_account_views());
+        'false' ->
+            lager:debug("database ~s is unhandled", [Account])
+    end;
 refresh(Database) ->
     refresh(wh_util:to_binary(Database)).
 
@@ -514,6 +579,44 @@ migrate_media(Account) ->
         {'error', _}=E2 ->
             io:format("unable to fetch private media files in db ~s: ~p~n", [AccountDb, E2])
     end.
+
+
+-spec migrate_faxes() -> 'ok'.
+-spec migrate_faxes(atom() | string() | binary()) -> 'ok'.
+
+migrate_faxes() ->
+    Accounts = whapps_util:get_all_accounts(),
+    Total = length(Accounts),
+    lists:foldr(fun(A, C) -> migrate_faxes_fold(A, C, Total) end, 1, Accounts),
+    'ok'.
+
+migrate_faxes_fold(AccountDb, Current, Total) ->
+    io:format("migrating faxes in database (~p/~p) '~s'~n", [Current, Total, AccountDb]),
+    _ = migrate_faxes(AccountDb),
+    Current + 1.
+
+migrate_faxes(Account) when not is_binary(Account) ->
+    migrate_faxes(wh_util:to_binary(Account));
+migrate_faxes(Account) ->
+    AccountDb = case couch_mgr:db_exists(Account) of
+                    'true' -> Account;
+                    'false' -> wh_util:format_account_id(Account, 'encoded')
+                end,
+    case couch_mgr:get_results(AccountDb, <<"media/listing_private_media">>, []) of
+        {'ok', []} -> io:format("no private media files in db for fax migration ~s~n", [AccountDb]);
+        {'ok', JObjs3}->
+            _ = [migrate_fax(AccountDb, JObj) || JObj <- JObjs3],
+            'ok';
+        {'error', _}=E3 ->
+            io:format("unable to fetch private media files in db ~s: ~p~n", [AccountDb, E3])
+    end.
+
+-spec migrate_fax(ne_binary(), wh_json:object()) -> 'ok'.
+migrate_fax(AccountDb, JObj) ->
+    DocId = wh_json:get_value(<<"id">>, JObj),
+    {'ok', Doc } = couch_mgr:open_doc(AccountDb, DocId),
+    _ = couch_mgr:save_doc(AccountDb, wh_json:set_value(<<"pvt_type">>, <<"fax">>, Doc)),
+    'ok'.
 
 %%--------------------------------------------------------------------
 %% @private

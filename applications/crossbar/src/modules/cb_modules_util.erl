@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @copyright (C) 2011-2013, 2600Hz INC
+%%% @copyright (C) 2011-2014, 2600Hz INC
 %%% @doc
 %%% Functions shared between crossbar modules
 %%% @end
@@ -14,9 +14,29 @@
          ,maybe_originate_quickcall/1
          ,is_superduper_admin/1
          ,attachment_name/2
+         ,bucket_name/1
+         ,reconcile_services/1
         ]).
 
 -include("../crossbar.hrl").
+
+%%--------------------------------------------------------------------
+%% @public
+%% @doc
+%% Bill for devices
+%% @end
+%%--------------------------------------------------------------------
+-spec reconcile_services(cb_context:context()) -> cb_context:context().
+reconcile_services(Context) ->
+    reconcile_services(Context, cb_context:req_verb(Context), cb_context:resp_status(Context)).
+
+reconcile_services(Context, <<"GET">>, 'success') -> Context;
+reconcile_services(Context, _Verb, 'success') ->
+    lager:debug("successful ~s, reconciling services", [_Verb]),
+    _ = wh_services:reconcile(cb_context:account_id(Context), <<"devices">>),
+    Context;
+reconcile_services(Context, _Verb, _Status) ->
+    Context.
 
 -spec pass_hashes(ne_binary(), ne_binary()) -> {ne_binary(), ne_binary()}.
 pass_hashes(Username, Password) ->
@@ -25,7 +45,7 @@ pass_hashes(Username, Password) ->
     MD5 = wh_util:to_hex_binary(erlang:md5(Creds)),
     {MD5, SHA1}.
 
--spec update_mwi('undefined' | ne_binary(), ne_binary()) -> pid().
+-spec update_mwi(api_binary(), ne_binary()) -> pid().
 update_mwi(OwnerId, AccountDb) ->
     spawn(fun() ->
                   timer:sleep(1000),
@@ -298,3 +318,20 @@ content_type_to_extension(<<"audio/mp3">>) -> <<"mp3">>;
 content_type_to_extension(<<"audio/ogg">>) -> <<"ogg">>;
 content_type_to_extension(<<"application/x-pdf">>) -> <<"pdf">>;
 content_type_to_extension(<<"application/pdf">>) -> <<"pdf">>.
+
+
+-spec bucket_name(cb_context:context()) -> ne_binary().
+-spec bucket_name(api_binary(), api_binary()) -> ne_binary().
+bucket_name(Context) ->
+    bucket_name(cb_context:client_ip(Context)
+                ,cb_context:account_id(Context)
+               ).
+
+bucket_name('undefined', 'undefined') ->
+    <<"no_ip/no_account">>;
+bucket_name(IP, 'undefined') ->
+    <<IP/binary, "/no_account">>;
+bucket_name('undefined', AccountId) ->
+    <<"no_ip/", AccountId/binary>>;
+bucket_name(IP, AccountId) ->
+    <<IP/binary, "/", AccountId/binary>>.

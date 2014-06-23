@@ -398,7 +398,6 @@ to_public_json(Transaction) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec clean_jobj/1 :: (wh_json:object()) -> wh_json:object().
--spec clean_jobj/2 :: ([{ne_binary(), ne_binary()}, ...] ,wh_json:object()) -> wh_json:object().
 clean_jobj(JObj) ->
     CleanKeys = [{<<"_id">>, <<"id">>}
                  ,{<<"pvt_amount">>, <<"amount">>, fun wht_util:units_to_dollars/1}
@@ -413,18 +412,7 @@ clean_jobj(JObj) ->
                       ,<<"pvt_modified">>
                       ,<<"_rev">>
                  ],
-    CleanJObj = clean_jobj(CleanKeys, JObj),
-    wh_json:delete_keys(RemoveKeys, CleanJObj).
-clean_jobj([], JObj) ->
-    JObj;
-clean_jobj([{OldKey, NewKey} | T], JObj) ->
-    Value = wh_json:get_value(OldKey, JObj),
-    J1 = wh_json:set_value(NewKey, Value, JObj),
-    clean_jobj(T, wh_json:delete_key(OldKey, J1));
-clean_jobj([{OldKey, NewKey, Fun} | T], JObj) ->
-    Value = wh_json:get_value(OldKey, JObj),
-    J1 = wh_json:set_value(NewKey, Fun(Value), JObj),
-    clean_jobj(T, wh_json:delete_key(OldKey, J1)).
+    wh_json:normalize_jobj(JObj, RemoveKeys, CleanKeys).
 
 
 
@@ -510,7 +498,7 @@ save_transaction(#wh_transaction{pvt_account_id=AccountId, pvt_created=Created}=
 prepare_transaction(#wh_transaction{pvt_account_id='undefined'}) ->
     {'error', 'account_id_missing'};
 prepare_transaction(#wh_transaction{pvt_account_db='undefined'}) ->
-    {'error', 'account_id_missing'};
+    {'error', 'account_db_missing'};
 prepare_transaction(#wh_transaction{pvt_code=Code}=Transaction) when 1001 =:= Code orelse 1002 =:= Code ->
     prepare_call_transaction(Transaction);
 prepare_transaction(#wh_transaction{pvt_code=Code}=Transaction) when 2001 =:= Code orelse 2002 =:= Code ->

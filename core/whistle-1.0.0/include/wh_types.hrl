@@ -90,10 +90,10 @@
 -type wh_second() :: 0..59.
 -type wh_daynum() :: 1..7.
 -type wh_weeknum() :: 1..53.
--type wh_date() :: calendar:t_date(). %%{wh_year(), wh_month(), wh_day()}.
--type wh_time() :: calendar:t_time(). %%{wh_hour(), wh_minute(), wh_second()}.
--type wh_datetime() :: calendar:t_datetime(). %%{wh_date(), wh_time()}.
--type wh_iso_week() :: calendar:t_yearweeknum(). %%{wh_year(), wh_weeknum()}.
+-type wh_date() :: calendar:date(). %%{wh_year(), wh_month(), wh_day()}.
+-type wh_time() :: calendar:time(). %%{wh_hour(), wh_minute(), wh_second()}.
+-type wh_datetime() :: calendar:datetime(). %%{wh_date(), wh_time()}.
+-type wh_iso_week() :: calendar:yearweeknum(). %%{wh_year(), wh_weeknum()}.
 
 -type wh_timeout() :: non_neg_integer() | 'infinity'.
 
@@ -140,9 +140,14 @@
 -type server_ref() :: atom() | {atom(), atom()} | {'global', term()} | {'via', atom(), term()} | pid().
 
 %% Ibrowse-related types
+-type ibrowse_error() :: {'error', 'req_timedout'
+                          | 'sel_conn_closed'
+                          | {'EXIT', term()}
+                          | {'conn_failed', {'error', atom()}}
+                         }.
 -type ibrowse_ret() :: {'ok', string(), wh_proplist(), string() | binary()} |
                        {'ibrowse_req_id', term()} |
-                       {'error', 'req_timedout' | 'sel_conn_closed' | {'EXIT', term()}}.
+                       ibrowse_error().
 %% When using the stream_to option, ibrowse:send_req returns this tuple ReqID
 -type ibrowse_req_id() :: {pos_integer(), pos_integer(), pos_integer()}.
 
@@ -157,6 +162,19 @@
 
 -type xml_text() :: #xmlText{value :: iolist()}.
 -type xml_texts() :: [xml_text(),...] | [].
+
+%% Used by ecallmgr and wapi_dialplan at least
+-define(CALL_EVENTS, [<<"CHANNEL_EXECUTE">>, <<"CHANNEL_EXECUTE_COMPLETE">>, <<"CHANNEL_EXECUTE_ERROR">>
+                      ,<<"CHANNEL_BRIDGE">>, <<"CHANNEL_UNBRIDGE">>
+                      ,<<"CHANNEL_CREATE">>, <<"CHANNEL_DESTROY">>
+                      ,<<"RECORD_START">>, <<"RECORD_STOP">>
+                      ,<<"DETECTED_TONE">>, <<"DTMF">>, <<"CALL_UPDATE">>
+                      ,<<"CHANNEL_ANSWER">>, <<"CHANNEL_PROGRESS_MEDIA">>
+                      ,<<"CHANNEL_TRANSFEREE">>, <<"CHANNEL_TRANSFEROR">>
+                      ,<<"CHANNEL_REPLACED">>, <<"CALL_SECURE">>, <<"CHANNEL_FAX_STATUS">>
+                     ]).
+-type xml_thing() :: xml_el() | xml_text().
+-type xml_things() :: xml_els() | xml_texts().
 
 -define(WHISTLE_TYPES_INCLUDED, 'true').
 -endif.

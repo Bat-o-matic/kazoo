@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @copyright (C) 2010-2013 2600Hz INC
+%%% @copyright (C) 2010-2014, 2600Hz INC
 %%% @doc
 %%% Execute call commands
 %%% @end
@@ -52,13 +52,15 @@ exec_cmd(Node, UUID, JObj, ControlPID) ->
 -spec get_fs_app(atom(), ne_binary(), wh_json:object(), ne_binary()) ->
                         fs_app() |
                         {'return', 'error'} |
+                        {'return', ne_binary()} |
                         {'error', ne_binary()} |
                         [fs_app(),...].
-get_fs_app(_Node, _UUID, JObj, <<"noop">>) ->
+get_fs_app(Node, UUID, JObj, <<"noop">>) ->
     case wapi_dialplan:noop_v(JObj) of
         'false' ->
             {'error', <<"noop failed to execute as JObj did not validate">>};
         'true' ->
+            _ = ecallmgr_fs_bridge:maybe_b_leg_events(Node, UUID, JObj),
             Args = case wh_json:get_value(<<"Msg-ID">>, JObj) of
                        'undefined' ->
                            <<"Event-Subclass=whistle::noop,Event-Name=CUSTOM"
@@ -393,38 +395,20 @@ get_fs_app(_Node, _UUID, JObj, <<"say">>) ->
     end;
 
 get_fs_app(Node, UUID, JObj, <<"bridge">>) ->
-    Endpoints = wh_json:get_ne_value(<<"Endpoints">>, JObj, []),
-    case wapi_dialplan:bridge_v(JObj) of
-        'false' -> {'error', <<"bridge failed to execute as JObj did not validate">>};
-        'true' when Endpoints =:= [] -> {'error', <<"bridge request had no endpoints">>};
-        'true' ->
-            %% if we are intending to ring multiple device simultaneously then
-            %% execute ring_ready so we dont leave the caller hanging with dead air.
-            %% this does not test how many are ACTUALLY dialed (registered)
-            %% since that is one of the things we want to be ringing during
-            _ = bridge_handle_ringback(Node, UUID, JObj),
-            _ = bridge_maybe_early_media(Node, UUID, JObj),
-            lager:debug("creating bridge dialplan"),
-            Routines = [fun bridge_handle_hold_media/4
-                        ,fun bridge_handle_secure_rtp/4
-                        ,fun bridge_handle_bypass_media/4
-                        ,fun bridge_handle_ccvs/4
-                        ,fun bridge_pre_exec/4
-                        ,fun bridge_create_command/4
-                        ,fun bridge_post_exec/4
-                       ],
-            lager:debug("creating bridge dialplan"),
-            XferExt = lists:foldr(fun(F, DP) ->
-                                          F(DP, Node, UUID, JObj) end
-                                  ,[], Routines),
-            {<<"xferext">>, XferExt}
-    end;
+    ecallmgr_fs_bridge:call_command(Node, UUID, JObj);
 
 get_fs_app(Node, UUID, JObj, <<"call_pickup">>) ->
     case wapi_dialplan:call_pickup_v(JObj) of
         'false' -> {'error', <<"intercept failed to execute as JObj did not validate">>};
         'true' -> call_pickup(Node, UUID, JObj)
     end;
+
+get_fs_app(Node, UUID, JObj, <<"eavesdrop">>) ->
+    case wapi_dialplan:eavesdrop_v(JObj) of
+        'false' -> {'error', <<"eavesdrop failed to execute as JObj did not validate">>};
+        'true' -> eavesdrop(Node, UUID, JObj)
+    end;
+
 
 get_fs_app(Node, UUID, JObj, <<"execute_extension">>) ->
     case wapi_dialplan:execute_extension_v(JObj) of
@@ -542,13 +526,44 @@ get_fs_app(_Node, _UUID, _JObj, _App) ->
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
+%% Eavesdrop command helpers
+%% @end
+%%--------------------------------------------------------------------
+-spec eavesdrop(atom(), ne_binary(), wh_json:object()) ->
+                       {ne_binary(), ne_binary()} |
+                       {'return', ne_binary()} |
+                       {'error', ne_binary()}.
+eavesdrop(Node, UUID, JObj) ->
+    case prepare_app(Node, UUID, JObj) of
+        {'execute', AppNode, AppUUID, AppJObj, AppTarget} ->
+            get_eavesdrop_app(AppNode, AppUUID, AppJObj, AppTarget);
+        Other ->
+            Other
+    end.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
 %% Call pickup command helpers
 %% @end
 %%--------------------------------------------------------------------
 -spec call_pickup(atom(), ne_binary(), wh_json:object()) ->
                          {ne_binary(), ne_binary()} |
+                         {'return', ne_binary()} |
                          {'error', ne_binary()}.
 call_pickup(Node, UUID, JObj) ->
+    case prepare_app(Node, UUID, JObj) of
+        {'execute', AppNode, AppUUID, AppJObj, AppTarget} ->
+            get_call_pickup_app(AppNode, AppUUID, AppJObj, AppTarget);
+        Other ->
+            Other
+    end.
+
+-spec prepare_app(atom(), ne_binary(), wh_json:object() ) ->
+    {ne_binary(), ne_binary()} |
+    {'return', ne_binary()} |
+    {'error', ne_binary()}.
+prepare_app(Node, UUID, JObj) ->
     Target = wh_json:get_value(<<"Target-Call-ID">>, JObj),
 
     case ecallmgr_fs_channel:fetch(Target, 'record') of
@@ -557,56 +572,111 @@ call_pickup(Node, UUID, JObj) ->
                        }} ->
             lager:debug("target ~s is on same node(~s) as us", [Target, Node]),
             maybe_answer(Node, UUID, IsAnswered),
-            get_call_pickup_app(Node, UUID, JObj, Target);
+            {'execute', Node, UUID, JObj, Target};
         {'ok', #channel{node=OtherNode}} ->
             lager:debug("target ~s is on other node (~s), not ~s", [Target, OtherNode, Node]),
-            call_pickup_maybe_move(Node, UUID, JObj, Target, OtherNode);
+            prepare_app_maybe_move(Node, UUID, JObj, Target, OtherNode);
         {'error', 'not_found'} ->
-            lager:debug("failed to find target callid ~s", [Target]),
-            {'error', <<"failed to find target callid ", Target/binary>>}
+            lager:debug("failed to find target callid ~s locally", [Target]),
+            prepare_app_via_amqp(Node, UUID, JObj, Target)
     end.
 
+-spec prepare_app_via_amqp(atom(), ne_binary(), wh_json:object(), ne_binary()) ->
+                                  {ne_binary(), ne_binary()} |
+                                  {'return', ne_binary()} |
+                                  {'error', ne_binary()}.
+prepare_app_via_amqp(Node, UUID, JObj, TargetCallId) ->
+    case wh_amqp_worker:call(?ECALLMGR_AMQP_POOL
+                             ,[{<<"Call-ID">>, TargetCallId}
+                               ,{<<"Active-Only">>, 'true'}
+                               | wh_api:default_headers(?APP_NAME, ?APP_VERSION)
+                              ]
+                             ,fun(C) -> wapi_call:publish_channel_status_req(TargetCallId, C) end
+                             ,fun wapi_call:channel_status_resp_v/1
+                            )
+    of
+        {'ok', Resp} ->
+            lager:debug("found response to channel query, checking for ~s: ~p", [TargetCallId, Resp]),
+            prepare_app_via_amqp(Node, UUID, JObj, TargetCallId, Resp);
+        {'error', _E} ->
+            lager:debug("error querying for channels for ~s: ~p", [TargetCallId, _E]),
+            {'error', <<"failed to find target callid ", TargetCallId/binary>>}
+    end.
+
+-spec prepare_app_via_amqp(atom(), ne_binary(), wh_json:object(), ne_binary(), wh_json:object()) ->
+                                  {ne_binary(), ne_binary()} |
+                                  {'return', ne_binary()}.
+prepare_app_via_amqp(Node, UUID, JObj, TargetCallId, Resp) ->
+    TargetNode = wh_json:get_value(<<"Switch-Nodename">>, Resp),
+    lager:debug("call ~s is on ~s", [TargetCallId, TargetNode]),
+    prepare_app_maybe_move_remote(Node, UUID, JObj, TargetCallId, wh_util:to_atom(TargetNode, 'true'), Resp).
+
+-spec maybe_answer(atom(), ne_binary(), boolean()) -> 'ok'.
 maybe_answer(_Node, _UUID, 'true') -> 'ok';
 maybe_answer(Node, UUID, 'false') ->
     ecallmgr_util:send_cmd(Node, UUID, <<"answer">>, <<>>).
 
--spec call_pickup_maybe_move(atom(), ne_binary(), wh_json:object(), ne_binary(), atom()) ->
-                                    {ne_binary(), ne_binary()}.
-call_pickup_maybe_move(Node, UUID, JObj, Target, OtherNode) ->
+-spec prepare_app_maybe_move(atom(), ne_binary(), wh_json:object(), ne_binary(), atom()) ->
+                                    {ne_binary(), ne_binary()} |
+                                    {'return', ne_binary()}.
+prepare_app_maybe_move(Node, UUID, JObj, Target, OtherNode) ->
     case wh_json:is_true(<<"Move-Channel-If-Necessary">>, JObj, 'false') of
         'true' ->
             lager:debug("target ~s is on ~s, not ~s...moving", [Target, OtherNode, Node]),
             'true' = ecallmgr_channel_move:move(Target, OtherNode, Node),
-            get_call_pickup_app(Node, UUID, JObj, Target);
+            {'execute', Node, UUID, JObj, Target};
         'false' ->
             lager:debug("target ~s is on ~s, not ~s, need to redirect", [Target, OtherNode, Node]),
-            lager:debug("gotta usurp some fools first"),
 
-            ControlUsurp = [{<<"Call-ID">>, UUID}
-                            ,{<<"Reason">>, <<"redirect">>}
-                            ,{<<"Fetch-ID">>, wh_util:rand_hex_binary(4)}
-                            | wh_api:default_headers(?APP_NAME, ?APP_VERSION)
-                           ],
-            PublishUsurp = [{<<"Call-ID">>, UUID}
-                            ,{<<"Reference">>, wh_util:rand_hex_binary(4)}
-                            ,{<<"Media-Node">>, wh_util:to_binary(Node)}
-                            ,{<<"Reason">>, <<"redirect">>}
-                            | wh_api:default_headers(?APP_NAME, ?APP_VERSION)
-                           ],
-
-            wh_amqp_worker:cast(?ECALLMGR_AMQP_POOL
-                                ,ControlUsurp
-                                ,fun(C) -> wapi_call:publish_usurp_control(UUID, C) end
-                               ),
-            wh_amqp_worker:cast(?ECALLMGR_AMQP_POOL
-                                ,PublishUsurp
-                                ,fun(C) -> wapi_call:publish_usurp_publisher(UUID, C) end
-                               ),
+            _ = prepare_app_usurpers(Node, UUID),
 
             lager:debug("now issue the redirect to ~s", [OtherNode]),
             _ = ecallmgr_channel_redirect:redirect(UUID, OtherNode),
             {'return', <<"target is on different media server: ", (wh_util:to_binary(OtherNode))/binary>>}
     end.
+
+-spec prepare_app_maybe_move_remote(atom(), ne_binary(), wh_json:object(), ne_binary(), atom(), wh_json:object()) ->
+                                           {ne_binary(), ne_binary()} |
+                                           {'return', ne_binary()}.
+prepare_app_maybe_move_remote(Node, UUID, JObj, TargetCallId, TargetNode, ChannelStatusJObj) ->
+    case wh_json:is_true(<<"Move-Channel-If-Necessary">>, JObj, 'false') of
+        'true' ->
+            lager:debug("target ~s is on ~s, not ~s...moving", [TargetCallId, TargetNode, Node]),
+            'true' = ecallmgr_channel_move:move(TargetCallId, TargetNode, Node),
+            {'execute', Node, UUID, JObj, TargetCallId};
+        'false' ->
+            lager:debug("target ~s is on ~s, not ~s, need to redirect", [TargetCallId, TargetNode, Node]),
+
+            _ = prepare_app_usurpers(Node, UUID),
+
+            lager:debug("now issue the redirect to ~s", [TargetNode]),
+            _ = ecallmgr_channel_redirect:redirect_remote(UUID, ChannelStatusJObj),
+            {'return', <<"target is on different media server: ", (wh_util:to_binary(TargetNode))/binary>>}
+    end.
+
+-spec prepare_app_usurpers(atom(), ne_binary()) -> 'ok'.
+prepare_app_usurpers(Node, UUID) ->
+            lager:debug("gotta usurp some fools first"),
+    ControlUsurp = [{<<"Call-ID">>, UUID}
+                    ,{<<"Reason">>, <<"redirect">>}
+                    ,{<<"Fetch-ID">>, wh_util:rand_hex_binary(4)}
+                    | wh_api:default_headers(?APP_NAME, ?APP_VERSION)
+                   ],
+    PublishUsurp = [{<<"Call-ID">>, UUID}
+                    ,{<<"Reference">>, wh_util:rand_hex_binary(4)}
+                    ,{<<"Media-Node">>, wh_util:to_binary(Node)}
+                    ,{<<"Reason">>, <<"redirect">>}
+                    | wh_api:default_headers(?APP_NAME, ?APP_VERSION)
+                   ],
+
+    wh_amqp_worker:cast(?ECALLMGR_AMQP_POOL
+                        ,ControlUsurp
+                        ,fun(C) -> wapi_call:publish_usurp_control(UUID, C) end
+                       ),
+    wh_amqp_worker:cast(?ECALLMGR_AMQP_POOL
+                        ,PublishUsurp
+                        ,fun(C) -> wapi_call:publish_usurp_publisher(UUID, C) end
+                       ).
 
 -spec get_call_pickup_app(atom(), ne_binary(), wh_json:object(), ne_binary()) ->
                                  {ne_binary(), ne_binary()}.
@@ -633,11 +703,41 @@ get_call_pickup_app(Node, UUID, JObj, Target) ->
                         ,ControlUsurp
                         ,fun(C) -> wapi_call:publish_usurp_control(Target, C) end
                        ),
-    io:format("published ~p for ~s~n", [ControlUsurp, Target]),
+    lager:debug("published ~p for ~s", [ControlUsurp, Target]),
 
     ecallmgr_util:set(Node, UUID, build_set_args(SetApi, JObj)),
     ecallmgr_util:export(Node, UUID, Exports),
     {<<"intercept">>, Target}.
+
+-spec get_eavesdrop_app(atom(), ne_binary(), wh_json:object(), ne_binary()) ->
+                                 {ne_binary(), ne_binary()}.
+get_eavesdrop_app(Node, UUID, JObj, Target) ->
+    ExportsApi = [{<<"Park-After-Pickup">>, <<"false">>}
+                  ,{<<"Continue-On-Fail">>, <<"true">>}
+                  ,{<<"Continue-On-Cancel">>, <<"true">>}
+                 ],
+
+    SetApi = [{<<"Enable-DTMF">>, 'undefined', <<"eavesdrop_enable_dtmf">>}
+             ],
+
+    Exports = [{<<"failure_causes">>, <<"NORMAL_CLEARING,ORIGINATOR_CANCEL,CRASH">>}
+               | build_set_args(ExportsApi, JObj)
+              ],
+
+    ControlUsurp = [{<<"Call-ID">>, Target}
+                    ,{<<"Reason">>, <<"redirect">>}
+                    ,{<<"Fetch-ID">>, wh_util:rand_hex_binary(4)}
+                    | wh_api:default_headers(?APP_NAME, ?APP_VERSION)
+                   ],
+    wh_amqp_worker:cast(?ECALLMGR_AMQP_POOL
+                        ,ControlUsurp
+                        ,fun(C) -> wapi_call:publish_usurp_control(Target, C) end
+                       ),
+    lager:debug("published ~p for ~s~n", [ControlUsurp, Target]),
+
+    ecallmgr_util:set(Node, UUID, build_set_args(SetApi, JObj)),
+    ecallmgr_util:export(Node, UUID, Exports),
+    {<<"eavesdrop">>, Target}.
 
 -type set_headers() :: wh_proplist() | [{ne_binary(), api_binary(), ne_binary()},...].
 -spec build_set_args(set_headers(), wh_json:object()) ->
@@ -753,154 +853,6 @@ wait_for_conference(ConfName) ->
             timer:sleep(100),
             wait_for_conference(ConfName)
     end.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Bridge command helpers
-%% @end
-%%--------------------------------------------------------------------
-bridge_handle_ringback(Node, UUID, JObj) ->
-    case wh_json:get_value(<<"Ringback">>, JObj) of
-        'undefined' ->
-            case wh_json:get_value([<<"Custom-Channel-Vars">>, <<"Ringback">>], JObj) of
-                'undefined' -> 'ok';
-                Media ->
-                    Stream = ecallmgr_util:media_path(Media, 'extant', UUID, JObj),
-                    lager:debug("bridge has custom ringback in channel vars: ~s", [Stream]),
-                    ecallmgr_util:set(Node, UUID, [{<<"ringback">>, Stream}])
-            end;
-        Media ->
-            Stream = ecallmgr_util:media_path(Media, extant, UUID, JObj),
-            lager:debug("bridge has custom ringback: ~s", [Stream]),
-            ecallmgr_util:set(Node, UUID, [{<<"ringback">>, Stream}])
-    end.
-
-bridge_maybe_early_media(Node, UUID, JObj) ->
-    case wh_json:get_value(<<"Dial-Endpoint-Method">>, JObj, <<"single">>) of
-        <<"simultaneous">> ->
-            case length(wh_json:get_ne_value(<<"Endpoints">>, JObj, [])) > 1 of
-                'false' -> 'ok';
-                'true' ->
-                    lager:debug("bridge is simultaneous to multiple endpoints, starting local ringing"),
-                    %% we don't really care if this succeeds, the call will fail later on
-                    ecallmgr_util:send_cmd(Node, UUID, <<"ring_ready">>, "")
-            end;
-        _Else -> 'ok'
-    end.
-
-bridge_handle_hold_media(DP, _Node, UUID, JObj) ->
-    case wh_json:get_value(<<"Hold-Media">>, JObj) of
-        'undefined' ->
-            case wh_json:get_value([<<"Custom-Channel-Vars">>, <<"Hold-Media">>], JObj) of
-                'undefined' -> DP;
-                Media ->
-                    Stream = ecallmgr_util:media_path(Media, extant, UUID, JObj),
-                    lager:debug("bridge has custom music-on-hold in channel vars: ~s", [Stream]),
-                    [{"application", <<"set hold_music=", Stream/binary>>}
-                     ,{"application", <<"set transfer_ringback=", Stream/binary>>}
-                     |DP
-                    ]
-            end;
-        Media ->
-            Stream = ecallmgr_util:media_path(Media, extant, UUID, JObj),
-            lager:debug("bridge has custom music-on-hold: ~s", [Stream]),
-            [{"application", <<"set hold_music=", Stream/binary>>}
-             ,{"application", <<"set transfer_ringback=", Stream/binary>>}
-             |DP
-            ]
-    end.
-
-bridge_handle_secure_rtp(DP, _Node, _UUID, JObj) ->
-    case wh_json:is_true(<<"Secure-RTP">>, JObj, 'false') of
-        'true' -> [{"application", "set zrtp_secure_media=true"}|DP];
-        'false' -> DP
-    end.
-
-bridge_handle_bypass_media(DP, _Node, _UUID, JObj) ->
-    case wh_json:get_value(<<"Media">>, JObj) of
-        <<"process">> ->
-            lager:debug("bridge will process media through host switch"),
-            [{"application", "set bypass_media=false"}|DP];
-        <<"bypass">> ->
-            lager:debug("bridge will connect the media peer-to-peer"),
-            [{"application", "set bypass_media=true"}|DP];
-        _ ->
-            Endpoints = wh_json:get_ne_value(<<"Endpoints">>, JObj, []),
-            maybe_bypass_endpoint_media(Endpoints, DP)
-    end.
-
--spec maybe_bypass_endpoint_media(wh_json:objects(), wh_proplist()) -> wh_proplist().
-maybe_bypass_endpoint_media([Endpoint], DP) ->
-    case wh_json:is_true(<<"Bypass-Media">>, Endpoint) of
-        'true' ->
-            [{"application", "set bypass_media=true"}|DP];
-        'false' ->
-            DP
-    end;
-maybe_bypass_endpoint_media(_, DP) ->
-    DP.
-
-bridge_handle_ccvs(DP, _Node, _UUID, JObj) ->
-    CCVs = wh_json:get_value(<<"Custom-Channel-Vars">>, JObj),
-    case wh_json:is_json_object(CCVs) of
-        'true' ->
-            [{"application", <<"set ", Var/binary, "=", (wh_util:to_binary(V))/binary>>}
-             || {K, V} <- wh_json:to_proplist(CCVs),
-                (Var = props:get_value(K, ?SPECIAL_CHANNEL_VARS)) =/= 'undefined'
-            ] ++ DP;
-        _ ->
-            DP
-    end.
-
-bridge_pre_exec(DP, _, _, _) ->
-    [{"application", "set continue_on_fail=true"}
-     ,{"application", "export sip_redirect_context=context_2"}
-     ,{"application", lists:concat(["export "
-                                    ,?CHANNEL_VAR_PREFIX, "Inception"
-                                    ,"="
-                                    ,"${", ?CHANNEL_VAR_PREFIX, "Inception}"
-                                   ])}
-     |DP
-    ].
-
-bridge_create_command(DP, _Node, _UUID, JObj) ->
-    Endpoints = wh_json:get_ne_value(<<"Endpoints">>, JObj, []),
-    BridgeCmd = list_to_binary(["bridge "
-                                ,bridge_build_channels_vars(Endpoints, JObj)
-                                ,try_create_bridge_string(Endpoints, JObj)
-                               ]),
-    [{"application", BridgeCmd}|DP].
-
-try_create_bridge_string(Endpoints, JObj) ->
-    DialSeparator = bridge_determine_dial_separator(Endpoints, JObj),
-    case ecallmgr_util:build_bridge_string(Endpoints, DialSeparator) of
-        <<>> ->
-            lager:warning("bridge string resulted in no enpoints"),
-            throw(<<"registrar returned no endpoints">>);
-        BridgeString -> BridgeString
-    end.
-
-bridge_build_channels_vars(Endpoints, JObj) ->
-    Props = case wh_json:find(<<"Force-Fax">>, Endpoints, wh_json:get_value(<<"Force-Fax">>, JObj)) of
-                'undefined' -> [];
-                Direction ->
-                    [{[<<"Custom-Channel-Vars">>, <<"Force-Fax">>], Direction}]
-            end,
-    ecallmgr_fs_xml:get_channel_vars(wh_json:set_values(Props, JObj)).
-
-bridge_determine_dial_separator(Endpoints, JObj) ->
-    case wh_json:get_value(<<"Dial-Endpoint-Method">>, JObj, <<"single">>) of
-        <<"simultaneous">> when length(Endpoints) > 1 -> <<",">>;
-        _Else -> <<"|">>
-    end.
-
-bridge_post_exec(DP, _, _, _) ->
-    Event = ecallmgr_util:create_masquerade_event(<<"bridge">>, <<"CHANNEL_EXECUTE_COMPLETE">>),
-    [{"application", Event}
-     ,{"application", "park "}
-     |DP
-    ].
 
 %%--------------------------------------------------------------------
 %% @private

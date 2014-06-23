@@ -277,10 +277,13 @@ maybe_save_tts(Context, _Text, _Voice, _Status) ->
 maybe_update_tts(Context, Text, Voice, 'success') ->
     JObj = cb_context:doc(Context),
     Voice = wh_json:get_value([<<"tts">>, <<"voice">>], JObj, ?DEFAULT_VOICE),
-    case whapps_speech:create(Text, Voice) of
-        {'error', R} ->
+    try whapps_speech:create(Text, Voice) of
+        {'error', Reason} ->
             crossbar_doc:delete(Context),
-            crossbar_util:response('error', wh_util:to_binary(R), Context);
+            crossbar_util:response('error', wh_util:to_binary(Reason), Context);
+        {'error', 'tts_provider_failure', Reason} ->
+            crossbar_doc:delete(Context),
+            crossbar_util:response('error', wh_util:to_binary(Reason), Context);
         {'ok', ContentType, Content} ->
             MediaId = wh_json:get_value(<<"_id">>, JObj),
             Headers = wh_json:from_list([{<<"content_type">>, ContentType}
@@ -299,6 +302,11 @@ maybe_update_tts(Context, Text, Voice, 'success') ->
                                        ,'error'
                                       )),
             crossbar_doc:load(MediaId, Context)
+    catch
+        _E:_R ->
+            lager:debug("creating tts excepted: ~s: ~p", [_E, _R]),
+            crossbar_doc:delete(Context),
+            crossbar_util:response('error', <<"creating TTS failed unexpectedly">>, Context)
     end;
 maybe_update_tts(Context, _Text, _Voice, _Status) -> Context.
 
@@ -436,24 +444,11 @@ update_media_binary(MediaId, Context) ->
     lager:debug("file content type: ~s", [CT]),
     Opts = [{'headers', [{'content_type', wh_util:to_list(CT)}]}],
 
-    Context1 = maybe_remove_old_attachments(Context),
+    Context1 = crossbar_util:maybe_remove_attachments(Context),
 
     crossbar_doc:save_attachment(MediaId, cb_modules_util:attachment_name(Filename, CT)
                                  ,Contents, Context1, Opts
                                 ).
-
-maybe_remove_old_attachments(Context) ->
-    MediaJObj = cb_context:doc(Context),
-    maybe_remove_old_attachments(Context, MediaJObj
-                                 ,wh_json:get_value(<<"_attachments">>, MediaJObj)
-                                ).
-maybe_remove_old_attachments(Context, _MediaJObj, 'undefined') ->
-    Context;
-maybe_remove_old_attachments(Context, MediaJObj, _Attachments) ->
-    lager:debug("removing old attachments"),
-    crossbar_doc:save(cb_context:set_doc(Context
-                                         ,wh_json:delete_key(<<"_attachments">>, MediaJObj)
-                                        )).
 
 %%--------------------------------------------------------------------
 %% @private

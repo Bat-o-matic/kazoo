@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @copyright (C) 2011-2013, 2600Hz
+%%% @copyright (C) 2011-2014, 2600Hz
 %%% @doc
 %%% Devices module
 %%%
@@ -22,7 +22,6 @@
          ,put/1
          ,post/2
          ,delete/2
-         ,reconcile_services/1
          ,is_ip_acl_unique/1
          ,get_all_acl_ips/0
          ,lookup_regs/1
@@ -53,7 +52,7 @@ init() ->
     _ = crossbar_bindings:bind(<<"v2_resource.execute.put.devices">>, ?MODULE, 'put'),
     _ = crossbar_bindings:bind(<<"v2_resource.execute.post.devices">>, ?MODULE, 'post'),
     _ = crossbar_bindings:bind(<<"v2_resource.execute.delete.devices">>, ?MODULE, 'delete'),
-    crossbar_bindings:bind(<<"v2_resource.finish_request.*.devices">>, ?MODULE, 'reconcile_services').
+    crossbar_bindings:bind(<<"v1_resource.finish_request.*.devices">>, 'cb_modules_util', 'reconcile_services').
 
 %%--------------------------------------------------------------------
 %% @public
@@ -140,22 +139,6 @@ authorize(?HTTP_GET, ?DEVICES_QCALL_NOUNS) ->
     'true';
 authorize(_Verb, _Nouns) ->
     'false'.
-
-%%--------------------------------------------------------------------
-%% @public
-%% @doc
-%% Bill for devices
-%% @end
-%%--------------------------------------------------------------------
--spec reconcile_services(cb_context:context()) -> cb_context:context().
-reconcile_services(Context) ->
-    reconcile_services(Context, cb_context:req_verb(Context)).
-
-reconcile_services(Context, ?HTTP_GET) ->
-    Context;
-reconcile_services(Context, _Verb) ->
-    _ = wh_services:reconcile(cb_context:account_id(Context), <<"devices">>),
-    Context.
 
 %%--------------------------------------------------------------------
 %% @public
@@ -585,7 +568,9 @@ is_ip_sip_auth_unique(IP, DeviceId) ->
 maybe_aggregate_device(DeviceId, Context) ->
     maybe_aggregate_device(DeviceId, Context, cb_context:resp_status(Context)).
 maybe_aggregate_device(DeviceId, Context, 'success') ->
-    case wh_util:is_true(cb_context:fetch(Context, 'aggregate_device')) of
+    case wh_util:is_true(cb_context:fetch(Context, 'aggregate_device'))
+        andalso whapps_config:get_is_true(?MOD_CONFIG_CAT, <<"allow_aggregates">>, <<"true">>)
+    of
         'false' ->
             maybe_remove_aggregate(DeviceId, Context);
         'true' ->

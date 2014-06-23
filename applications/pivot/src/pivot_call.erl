@@ -63,6 +63,7 @@
 %% @spec start_link() -> {'ok', Pid} | ignore | {'error', Error}
 %% @end
 %%--------------------------------------------------------------------
+-spec start_link(whapps_call:call(), wh_json:object()) -> startlink_ret().
 start_link(Call, JObj) ->
     CallId = whapps_call:call_id(Call),
 
@@ -132,6 +133,7 @@ relay_cdr_event(JObj, Props) ->
 %%                     {'stop', Reason}
 %% @end
 %%--------------------------------------------------------------------
+-spec init([whapps_call:call() | wh_json:object()]) -> {'ok', state(), 'hibernate'}.
 init([Call, JObj]) ->
     put('callid', whapps_call:call_id(Call)),
 
@@ -165,6 +167,7 @@ init([Call, JObj]) ->
 %%                                   {'stop', Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+-spec handle_call(term(), pid_ref(), state()) -> {'reply', 'ok', state()}.
 handle_call(_Request, _From, State) ->
     {'reply', 'ok', State}.
 
@@ -178,6 +181,8 @@ handle_call(_Request, _From, State) ->
 %%                                  {'stop', Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+-spec handle_cast(term(), state()) -> {'noreply', state()} |
+                                      {'stop', 'normal', state()}.
 handle_cast('usurp', State) ->
     lager:debug("terminating pivot call because of usurp"),
     {'stop', 'normal', State#state{call='undefined'}};
@@ -206,18 +211,26 @@ handle_cast({'gen_listener', {'created_queue', Q}}, #state{call=Call}=State) ->
     %% TODO: Block on waiting for controller queue
     {'noreply', State#state{call=whapps_call:set_controller_queue(Q, Call)}};
 
-handle_cast({'stop', Call}, #state{cdr_uri='undefined'}=State) ->
+handle_cast({'stop', _Call}, #state{cdr_uri='undefined'}=State) ->
     lager:debug("no cdr callback, server going down"),
-    _ = whapps_call_command:hangup(Call),
     {'stop', 'normal', State};
 
-handle_cast({'cdr', JObj}, #state{cdr_uri=Url}=State) when Url =/= 'undefined'->
+handle_cast({'cdr', _JObj}, #state{cdr_uri='undefined'
+                                   ,call=Call
+                                  }=State) ->
+    lager:debug("recv cdr for call, no cdr uri though"),
+    erlang:send_after(3000, self(), {'stop', Call}),
+    {'noreply', State};
+handle_cast({'cdr', JObj}, #state{cdr_uri=Url
+                                  ,call=Call
+                                 }=State) ->
     JObj1 = wh_json:delete_key(<<"Custom-Channel-Vars">>, JObj),
     Body =  wh_json:to_querystring(wh_api:remove_defaults(JObj1)),
     Headers = [{"Content-Type", "application/x-www-form-urlencoded"}],
     _R = ibrowse:send_req(wh_util:to_list(Url), Headers, 'post', Body),
     lager:debug("cdr callback resp from server: ~p", [_R]),
-    {'stop', 'normal', State};
+    erlang:send_after(3000, self(), {'stop', Call}),
+    {'noreply', State};
 
 handle_cast({'add_event_handler', {Pid, _Ref}}, #state{response_event_handlers=Pids}=State) ->
     lager:debug("adding event handler ~p", [Pid]),
@@ -242,6 +255,10 @@ handle_cast(_Req, State) ->
 %%                                   {'stop', Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+-spec handle_info(term(), state()) -> {'noreply', state()} |
+                                      {'stop', term(), state()}.
+handle_info({'stop', _Call}, State) ->
+    {'stop', 'normal', State};
 handle_info({'ibrowse_async_headers', ReqId, "200", Hdrs}
             ,#state{request_id=ReqId}=State) ->
     RespHeaders = normalize_resp_headers(Hdrs),
@@ -304,13 +321,11 @@ handle_info({'ibrowse_async_response_end', ReqId}, #state{request_id=ReqId
                             ,response_ref = Ref
                            }
      ,'hibernate'};
-
 handle_info({'DOWN', Ref, 'process', Pid, Reason}, #state{response_pid=Pid
                                                           ,response_ref=Ref
                                                          }=State) ->
     lager:debug("response pid ~p(~p) down: ~p", [Pid, Ref, Reason]),
     {'noreply', State#state{response_pid='undefined'}, 'hibernate'};
-
 handle_info(_Info, State) ->
     lager:debug("unhandled message: ~p", [_Info]),
     {'noreply', State}.
@@ -343,8 +358,12 @@ handle_event(_JObj, #state{response_pid=Pid
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, #state{call=Call}) ->
+-spec terminate(term(), state()) -> 'ok'.
+terminate(_Reason, #state{call=Call
+                          ,response_pid=Pid
+                         }) ->
     _ = whapps_call_command:hangup(Call),
+    exit(Pid, 'kill'),
     lager:info("pivot call terminating: ~p", [_Reason]).
 
 %%--------------------------------------------------------------------
@@ -355,6 +374,7 @@ terminate(_Reason, #state{call=Call}) ->
 %% @spec code_change(OldVsn, State, Extra) -> {'ok', NewState}
 %% @end
 %%--------------------------------------------------------------------
+-spec code_change(term(), state(), term()) -> {'ok', state()}.
 code_change(_OldVsn, State, _Extra) ->
     {'ok', State}.
 

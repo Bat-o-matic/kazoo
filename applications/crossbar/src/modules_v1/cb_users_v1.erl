@@ -18,6 +18,7 @@
          ,resource_exists/0, resource_exists/1, resource_exists/2, resource_exists/3
          ,authenticate/1
          ,authorize/1
+         ,billing/1
          ,validate/1, validate/2, validate/3, validate/4
          ,put/1
          ,post/2
@@ -30,6 +31,7 @@
 -define(CB_LIST, <<"users/crossbar_listing">>).
 -define(LIST_BY_USERNAME, <<"users/list_by_username">>).
 -define(CHANNELS, <<"channels">>).
+-define(QUICKCALL, <<"quickcall">>).
 
 %%%===================================================================
 %%% API
@@ -49,6 +51,7 @@ init() ->
     _ = crossbar_bindings:bind(<<"v1_resource.resource_exists.users">>, ?MODULE, 'resource_exists'),
     _ = crossbar_bindings:bind(<<"v1_resource.authenticate">>, ?MODULE, 'authenticate'),
     _ = crossbar_bindings:bind(<<"v1_resource.authorize">>, ?MODULE, 'authorize'),
+    _ = crossbar_bindings:bind(<<"v1_resource.billing">>, ?MODULE, 'billing'),
     _ = crossbar_bindings:bind(<<"v1_resource.validate.users">>, ?MODULE, 'validate'),
     _ = crossbar_bindings:bind(<<"v1_resource.execute.put.users">>, ?MODULE, 'put'),
     _ = crossbar_bindings:bind(<<"v1_resource.execute.post.users">>, ?MODULE, 'post'),
@@ -76,7 +79,7 @@ allowed_methods(_) ->
 allowed_methods(_, ?CHANNELS) ->
     [?HTTP_GET].
 
-allowed_methods(_, <<"quickcall">>, _) ->
+allowed_methods(_, ?QUICKCALL, _) ->
     [?HTTP_GET].
 
 %%--------------------------------------------------------------------
@@ -94,7 +97,27 @@ allowed_methods(_, <<"quickcall">>, _) ->
 resource_exists() -> 'true'.
 resource_exists(_) -> 'true'.
 resource_exists(_, ?CHANNELS) -> 'true'.
-resource_exists(_, <<"quickcall">>, _) -> 'true'.
+resource_exists(_, ?QUICKCALL, _) -> 'true'.
+
+%%--------------------------------------------------------------------
+%% @public
+%% @doc
+%% Ensure we will be able to bill for users
+%% @end
+%%--------------------------------------------------------------------
+billing(Context) ->
+    process_billing(Context, cb_context:req_nouns(Context), cb_context:req_verb(Context)).
+
+process_billing(Context, [{<<"users">>, _}|_], ?HTTP_GET) ->
+    Context;
+process_billing(Context, [{<<"users">>, _}|_], _Verb) ->
+    try wh_services:allow_updates(cb_context:account_id(Context)) of
+        'true' -> Context
+    catch
+        'throw':{Error, Reason} ->
+            crossbar_util:response('error', wh_util:to_binary(Error), 500, Reason, Context)
+    end;
+process_billing(Context, _Nouns, _Verb) -> Context.
 
 %%--------------------------------------------------------------------
 %% @public
@@ -103,14 +126,22 @@ resource_exists(_, <<"quickcall">>, _) -> 'true'.
 %% @end
 %%--------------------------------------------------------------------
 -spec authenticate(cb_context:context()) -> 'true'.
-authenticate(#cb_context{req_nouns=?USERS_QCALL_NOUNS, req_verb = ?HTTP_GET}) ->
+authenticate(Context) ->
+    authenticate_users(cb_context:req_nouns(Context), cb_context:req_verb(Context)).
+
+authenticate_users(?USERS_QCALL_NOUNS, ?HTTP_GET) ->
     lager:debug("authenticating request"),
-    'true'.
+    'true';
+authenticate_users(_Nouns, _Verb) -> 'false'.
 
 -spec authorize(cb_context:context()) -> 'true'.
-authorize(#cb_context{req_nouns=?USERS_QCALL_NOUNS, req_verb = ?HTTP_GET}) ->
+authorize(Context) ->
+    authorize_users(cb_context:req_nouns(Context), cb_context:req_verb(Context)).
+
+authorize_users(?USERS_QCALL_NOUNS, ?HTTP_GET) ->
     lager:debug("authorizing request"),
-    'true'.
+    'true';
+authorize_users(_Nouns, _Verb) -> 'false'.
 
 %%--------------------------------------------------------------------
 %% @public
@@ -124,19 +155,25 @@ authorize(#cb_context{req_nouns=?USERS_QCALL_NOUNS, req_verb = ?HTTP_GET}) ->
 -spec validate(cb_context:context()) -> cb_context:context().
 -spec validate(cb_context:context(), path_token()) -> cb_context:context().
 
-validate(#cb_context{req_verb = ?HTTP_GET}=Context) ->
-    load_user_summary(Context);
-validate(#cb_context{req_verb = ?HTTP_PUT}=Context) ->
-    validate_request(undefined, Context).
+validate(Context) ->
+    validate_users(Context, cb_context:req_verb(Context)).
 
-validate(#cb_context{req_verb = ?HTTP_GET}=Context, UserId) ->
+validate_users(Context, ?HTTP_GET) ->
+    load_user_summary(Context);
+validate_users(Context, ?HTTP_PUT) ->
+    validate_request('undefined', Context).
+
+validate(Context, UserId) ->
+    validate_user(Context, UserId, cb_context:req_verb(Context)).
+
+validate_user(Context, UserId, ?HTTP_GET) ->
     load_user(UserId, Context);
-validate(#cb_context{req_verb = ?HTTP_POST}=Context, UserId) ->
+validate_user(Context, UserId, ?HTTP_POST) ->
     validate_request(UserId, Context);
-validate(#cb_context{req_verb = ?HTTP_DELETE}=Context, UserId) ->
+validate_user(Context, UserId, ?HTTP_DELETE) ->
     load_user(UserId, Context).
 
-validate(#cb_context{req_verb = ?HTTP_GET}=Context, UserId, ?CHANNELS) ->
+validate(Context, UserId, ?CHANNELS) ->
     Options = [{'key', [UserId, <<"device">>]}
                ,'include_docs'
               ],
@@ -147,7 +184,7 @@ validate(#cb_context{req_verb = ?HTTP_GET}=Context, UserId, ?CHANNELS) ->
         'false' -> get_channels(Context1)
     end.
 
-validate(#cb_context{req_verb = ?HTTP_GET}=Context, UserId, <<"quickcall">>, _) ->
+validate(Context, UserId, ?QUICKCALL, _) ->
     Context1 = maybe_validate_quickcall(load_user(UserId, Context)),
     case cb_context:has_errors(Context1) of
         'true' -> Context1;
@@ -249,37 +286,45 @@ load_user(UserId, Context) -> crossbar_doc:load(UserId, Context).
 validate_request(UserId, Context) ->
     prepare_username(UserId, Context).
 
-prepare_username(UserId, #cb_context{req_data=JObj}=Context) ->
+prepare_username(UserId, Context) ->
+    JObj = cb_context:req_data(Context),
     case wh_json:get_ne_value(<<"username">>, JObj) of
         'undefined' -> check_user_schema(UserId, Context);
         Username ->
             JObj1 = wh_json:set_value(<<"username">>, wh_util:to_lower_binary(Username), JObj),
-            check_user_schema(UserId, Context#cb_context{req_data=JObj1})
+            check_user_schema(UserId, cb_context:set_req_data(Context, JObj1))
     end.
 
 check_user_schema(UserId, Context) ->
     OnSuccess = fun(C) -> on_successful_validation(UserId, C) end,
     cb_context:validate_request_data(<<"users">>, Context, OnSuccess).
 
-on_successful_validation('undefined', #cb_context{doc=Doc}=Context) ->
+on_successful_validation('undefined', Context) ->
     Props = [{<<"pvt_type">>, <<"user">>}],
-    maybe_import_credintials('undefined', Context#cb_context{doc=wh_json:set_values(Props, Doc)});
-on_successful_validation(UserId, #cb_context{}=Context) ->
+    maybe_import_credintials('undefined'
+                             ,cb_context:set_doc(Context
+                                                 ,wh_json:set_values(Props, cb_context:doc(Context))
+                                                )
+                            );
+on_successful_validation(UserId, Context) ->
     maybe_import_credintials(UserId, crossbar_doc:load_merge(UserId, Context)).
 
-maybe_import_credintials(UserId, #cb_context{doc=JObj}=Context) ->
+maybe_import_credintials(UserId, Context) ->
+    JObj = cb_context:doc(Context),
     case wh_json:get_ne_value(<<"credentials">>, JObj) of
         'undefined' -> maybe_validate_username(UserId, Context);
         Creds ->
             RemoveKeys = [<<"credentials">>, <<"pvt_sha1_auth">>],
-            C = Context#cb_context{doc=wh_json:set_value(<<"pvt_md5_auth">>, Creds
-                                                         ,wh_json:delete_keys(RemoveKeys, JObj)
-                                                        )},
+            C = cb_context:set_doc(Context
+                                   ,wh_json:set_value(<<"pvt_md5_auth">>, Creds
+                                                      ,wh_json:delete_keys(RemoveKeys, JObj)
+                                                     )
+                                   ),
             maybe_validate_username(UserId, C)
     end.
 
-maybe_validate_username(UserId, #cb_context{doc=JObj}=Context) ->
-    NewUsername = wh_json:get_ne_value(<<"username">>, JObj),
+maybe_validate_username(UserId, Context) ->
+    NewUsername = wh_json:get_ne_value(<<"username">>, cb_context:doc(Context)),
     CurrentUsername = case cb_context:fetch(Context, 'db_doc') of
                           'undefined' -> NewUsername;
                           CurrentJObj ->
@@ -357,7 +402,7 @@ maybe_validate_quickcall(Context) ->
     maybe_validate_quickcall(Context, cb_context:resp_status(Context)).
 
 maybe_validate_quickcall(Context, 'success') ->
-    case (not wh_util:is_empty(db_context:auth_token(Context)))
+    case (not wh_util:is_empty(cb_context:auth_token(Context)))
         orelse wh_json:is_true(<<"allow_anoymous_quickcalls">>, cb_context:doc(Context))
     of
         'false' -> cb_context:add_system_error('invalid_credentials', Context);

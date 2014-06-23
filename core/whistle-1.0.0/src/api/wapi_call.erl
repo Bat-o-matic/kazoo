@@ -66,7 +66,8 @@
 -define(CALL_EVENT_ROUTING_KEY(Event, CallId), <<"call."
                                                  ,(wh_util:to_binary(Event))/binary
                                                  ,"."
-                                                 ,(amqp_util:encode(CallId))/binary>>).
+                                                 ,(amqp_util:encode(CallId))/binary
+                                               >>).
 -define(CALL_EVENT_HEADERS, [<<"Call-ID">>]).
 -define(OPTIONAL_CALL_EVENT_HEADERS, [<<"Application-Name">>, <<"Application-Response">>
                                       ,<<"Application-Event">>, <<"Application-Data">>
@@ -109,8 +110,9 @@
 %% Channel Status Response
 -define(CHANNEL_STATUS_RESP_HEADERS, [<<"Call-ID">>, <<"Status">>]).
 -define(OPTIONAL_CHANNEL_STATUS_RESP_HEADERS, [<<"Custom-Channel-Vars">>, <<"Error-Msg">>
-                                                   ,<<"Switch-Hostname">>, <<"Switch-Nodename">>
-                                                   ,<<"Switch-URL">>, <<"Other-Leg-Call-ID">>
+                                               ,<<"Switch-Hostname">>, <<"Switch-Nodename">>
+                                               ,<<"Switch-URL">>, <<"Other-Leg-Call-ID">>
+                                               ,<<"Realm">>, <<"Username">>
                                               ]).
 -define(CHANNEL_STATUS_RESP_VALUES, [{<<"Event-Category">>, <<"call_event">>}
                                      ,{<<"Event-Name">>, <<"channel_status_resp">>}
@@ -135,13 +137,18 @@
 -define(QUERY_AUTH_ID_RESP_TYPES, []).
 
 %% Query User Channels Req
--define(QUERY_USER_CHANNELS_REQ_HEADERS, [<<"Realm">>]).
--define(OPTIONAL_QUERY_USER_CHANNELS_REQ_HEADERS, [<<"Usernames">>, <<"Username">>]).
+-define(QUERY_USER_CHANNELS_REQ_HEADERS, []).
+-define(OPTIONAL_QUERY_USER_CHANNELS_REQ_HEADERS, [<<"Usernames">>, <<"Username">>
+                                                   ,<<"Realm">>, <<"Authorizing-IDs">>
+                                                   ,<<"Active-Only">>
+                                                  ]).
 -define(QUERY_USER_CHANNELS_REQ_VALUES, [{<<"Event-Category">>, <<"call_event">>}
                                          ,{<<"Event-Name">>, <<"query_user_channels_req">>}
                                         ]).
 -define(QUERY_USER_CHANNELS_REQ_TYPES, [{<<"Usernames">>, fun erlang:is_list/1}
                                         ,{<<"Username">>, fun erlang:is_binary/1}
+                                        ,{<<"Authorizing-IDs">>, fun erlang:is_list/1}
+                                        ,{<<"Active-Only">>, fun wh_util:is_boolean/1}
                                        ]).
 
 %% Query User Channels Resp
@@ -172,7 +179,7 @@
 
 %% Query Channels Req
 -define(QUERY_CHANNELS_REQ_HEADERS, []).
--define(OPTIONAL_QUERY_CHANNELS_REQ_HEADERS, [<<"Fields">>]).
+-define(OPTIONAL_QUERY_CHANNELS_REQ_HEADERS, [<<"Fields">>, <<"Call-ID">>]).
 -define(QUERY_CHANNELS_REQ_VALUES, [{<<"Event-Category">>, <<"call_event">>}
                                     ,{<<"Event-Name">>, <<"query_channels_req">>}
                                    ]).
@@ -540,6 +547,9 @@ publish_query_user_channels_req(JObj) ->
                                     ,?DEFAULT_CONTENT_TYPE
                                    ).
 
+publish_query_user_channels_req(Req, 'undefined', 'undefined', ContentType) ->
+    {'ok', Payload} = wh_api:prepare_api_payload(Req, ?QUERY_USER_CHANNELS_REQ_VALUES, fun ?MODULE:query_user_channels_req/1),
+    amqp_util:callevt_publish(?CALL_EVENT_ROUTING_KEY('status_req', <<>>), Payload, ContentType);
 publish_query_user_channels_req(Req, 'undefined', Realm, ContentType) ->
     Username = first_username(Req),
     publish_query_user_channels_req(Req, Username, Realm, ContentType);
@@ -627,5 +637,6 @@ first_username(JObj) ->
     [U|_] = wh_json:get_value(<<"Usernames">>, JObj),
     U.
 
+-spec event_routing_key(ne_binary(), ne_binary()) -> ne_binary().
 event_routing_key(EventName, CallId) ->
     ?CALL_EVENT_ROUTING_KEY(EventName, CallId).

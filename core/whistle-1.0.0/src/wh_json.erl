@@ -52,6 +52,7 @@
 -export([load_fixture_from_file/2]).
 
 -export([normalize_jobj/1
+         ,normalize_jobj/3
          ,normalize/1
          ,normalize_key/1
          ,is_json_object/1, is_json_object/2
@@ -191,7 +192,7 @@ merge_jobjs(?JSON_WRAPPER(Props1)=_JObj1, ?JSON_WRAPPER(_)=JObj2) ->
                         set_value(K, V, JObj2Acc)
                 end, JObj2, Props1).
 
--type merge_pred() :: fun(({json_term(), json_term()}) -> boolean()).
+-type merge_pred() :: fun((json_term(), json_term()) -> boolean()).
 
 -spec merge_true(any(), any()) -> 'true'.
 merge_true(_, _) -> 'true'.
@@ -763,6 +764,25 @@ normalize_key_char(C) when is_integer(C), $A =< C, C =< $Z -> C + 32;
 normalize_key_char(C) when is_integer(C), 16#C0 =< C, C =< 16#D6 -> C + 32; % from string:to_lower
 normalize_key_char(C) when is_integer(C), 16#D8 =< C, C =< 16#DE -> C + 32; % so we only loop once
 normalize_key_char(C) -> C.
+
+-type search_replace_format() :: {ne_binary(), ne_binary()} |
+                                  {ne_binary(), ne_binary(), fun((term()) -> term())}.
+-type search_replace_formatters() :: [search_replace_format(),...] | [].
+-spec normalize_jobj(object(), ne_binaries(), search_replace_formatters()) -> object().
+normalize_jobj(?JSON_WRAPPER(_)=JObj, RemoveKeys, SearchReplaceFormatters) ->
+    normalize_jobj(
+      lists:foldl(fun search_replace_format/2
+                  ,delete_keys(RemoveKeys, JObj)
+                  ,SearchReplaceFormatters
+                 )).
+
+-spec search_replace_format(search_replace_format(), object()) -> object().
+search_replace_format({Old, New}, JObj) ->
+    V = get_value(Old, JObj),
+    set_value(New, V, delete_key(Old, JObj));
+search_replace_format({Old, New, Formatter}, JObj) when is_function(Formatter, 1) ->
+    V = get_value(Old, JObj),
+    set_value(New, Formatter(V), delete_key(Old, JObj)).
 
 %%--------------------------------------------------------------------
 %% @public

@@ -440,12 +440,8 @@ get_originate_action(<<"transfer">>, JObj) ->
     end;
 get_originate_action(<<"bridge">>, JObj) ->
     lager:debug("got originate with action bridge"),
-
-    case wh_json:get_binary_value(<<"Existing-Call-ID">>, JObj) of
-        'undefined' -> get_bridge_action(JObj);
-        ExistingCallId -> <<" 'set:intercept_unbridged_only=true,intercept:", ExistingCallId/binary, "' inline ">>
-    end;
-
+    CallId = wh_json:get_binary_value(<<"Existing-Call-ID">>, JObj),
+    intercept_unbridged_only(CallId, JObj);
 get_originate_action(<<"eavesdrop">>, JObj) ->
     lager:debug("got originate with action eavesdrop"),
     EavesdropCallId = wh_json:get_binary_value(<<"Eavesdrop-Call-ID">>, JObj),
@@ -461,10 +457,20 @@ get_originate_action(_, _) ->
     lager:debug("got originate with action park"),
     ?ORIGINATE_PARK.
 
+-spec intercept_unbridged_only(ne_binary() | 'undefined', wh_json:object()) -> ne_binary().
+intercept_unbridged_only('undefined', JObj) ->
+    get_bridge_action(JObj);
+intercept_unbridged_only(ExistingCallId, JObj) ->
+    case wh_json:is_true(<<"Intercept-Unbridged-Only">>, JObj, 'true') of
+        'true' ->
+            <<" 'set:intercept_unbridged_only=true,intercept:", ExistingCallId/binary, "' inline ">>;
+        'false' ->
+            <<" 'set:intercept_unbridged_only=false,intercept:", ExistingCallId/binary, "' inline ">>
+    end.
+
 -spec get_bridge_action(wh_json:object()) -> ne_binary().
 get_bridge_action(JObj) ->
     Data = wh_json:get_value(<<"Application-Data">>, JObj),
-
     case ecallmgr_util:build_channel(Data) of
         {'error', _} -> <<"error">>;
         {'ok', Channel} ->
@@ -532,15 +538,25 @@ build_originate_args_from_endpoints(Action, Endpoints, JObj, FetchId) ->
 originate_execute(Node, Dialstrings, Timeout) ->
     lager:debug("executing on ~s: ~s", [Node, Dialstrings]),
     case freeswitch:api(Node, 'originate', wh_util:to_list(Dialstrings), Timeout*1000) of
-        {'ok', <<"+OK ", UUID/binary>>} ->
-            {'ok', wh_util:strip_binary(binary:replace(UUID, <<"\n">>, <<>>))};
+        {'ok', <<"+OK ", ID/binary>>} ->
+            UUID = wh_util:strip_binary(binary:replace(ID, <<"\n">>, <<>>)),
+            Media = get('hold_media'),
+            spawn(fun() -> set_music_on_hold(Node, UUID, Media) end),
+            {'ok', UUID};
         {'ok', Other} ->
             lager:debug("recv other 'ok': ~s", [Other]),
-            {'error', Other};
-        {'error', _E}=Error ->
-            lager:debug("error originating: ~s", [_E]),
-            Error
+            {'error', wh_util:strip_binary(binary:replace(Other, <<"\n">>, <<>>))};
+        {'error', Error} ->
+            lager:debug("error originating: ~s", [Error]),
+            {'error', wh_util:strip_binary(binary:replace(Error, <<"\n">>, <<>>))}
     end.
+
+-spec set_music_on_hold(ne_binary(), ne_binary(), ne_binary()) -> 'ok'.
+set_music_on_hold(_, _, 'undefined') -> 'ok';
+set_music_on_hold(Node, UUID, Media) ->
+    Resp = ecallmgr_util:set(Node, UUID, [{<<"Hold-Media">>, Media}]),
+    lager:debug("setting Hold-Media ~p", [Resp]).
+
 
 -spec bind_to_call_events(ne_binary()) -> 'ok'.
 bind_to_call_events(CallId) ->
@@ -768,9 +784,14 @@ update_endpoint(Endpoint, #state{node=Node
     maybe_start_call_handlers(UUID, State#state{uuid=UUID
                                                 ,control_pid='undefined'
                                                }),
-    wh_json:set_value(<<"origination_uuid">>, Id, Endpoint);
-update_endpoint(Endpoint, {_, ID}) ->
-    wh_json:set_value(<<"origination_uuid">>, ID, Endpoint).
+    fix_hold_media(wh_json:set_value(<<"origination_uuid">>, Id, Endpoint), State);
+update_endpoint(Endpoint, {_, ID}=State) ->
+    fix_hold_media(wh_json:set_value(<<"origination_uuid">>, ID, Endpoint), State).
+
+fix_hold_media(Endpoint, State) ->
+    put('hold_media', wh_json:get_value(<<"Hold-Media">>, Endpoint)),
+    wh_json:delete_key(<<"Hold-Media">>, Endpoint).
+
 
 -spec should_update_uuid(api_binary(), wh_proplist()) -> boolean().
 should_update_uuid(OldUUID, Props) ->

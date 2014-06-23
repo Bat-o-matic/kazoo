@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @copyright (C) 2012-2013, 2600Hz
+%%% @copyright (C) 2012-2014, 2600Hz
 %%% @doc
 %%%
 %%% @end
@@ -22,8 +22,11 @@
          ,get_engine/1
          ,get_voice/1
          ,exec_gather_els/3
+         ,action_url/1
         ]).
 
+-spec parse_cmds(iolist()) -> {'ok', xml_els()} |
+                              {'error', 'not_parsed'}.
 parse_cmds(XMLString) ->
     try xmerl_scan:string(wh_util:to_list(XMLString)) of
         {#xmlElement{name='Response'}=XML, _} -> {'ok', XML};
@@ -142,7 +145,11 @@ exec_element(_Call, #xmlElement{name=Unknown
                                 ,content=_Content
                                 ,attributes=_Attrs
                                }) ->
-    throw({'unknown_element', Unknown}).
+    throw({'unknown_element', Unknown});
+exec_element(Call, _Xml) ->
+    lager:debug("unhandled XML object: ~p", [_Xml]),
+    {'ok', Call}.
+
 
 -spec req_params(whapps_call:call()) -> wh_proplist().
 req_params(Call) ->
@@ -178,11 +185,12 @@ hangup(Call) ->
 -spec reject(whapps_call:call(), xml_attribs()) ->
                     {'stop', whapps_call:call()}.
 reject(Call, Attrs) ->
-    Props = kzt_util:xml_attributes_to_proplist(Attrs),
+    Props = kz_xml:attributes_to_proplist(Attrs),
 
     Reason = reject_reason(Props),
     Code = reject_code(Reason),
 
+    lager:debug("rejecting call with ~s(~s)", [Reason, Code]),
     _ = whapps_call_command:response(Code, Reason, reject_prompt(Props), Call),
     {'stop', kzt_util:update_call_status(reject_status(Code), Call)}.
 
@@ -190,7 +198,7 @@ reject(Call, Attrs) ->
                    {'ok', whapps_call:call()}.
 pause(Call, Attrs) ->
     whapps_call_command:answer(Call),
-    Props = kzt_util:xml_attributes_to_proplist(Attrs),
+    Props = kz_xml:attributes_to_proplist(Attrs),
 
     PauseFor = pause_for(Props),
     lager:debug("pause for ~b ms", [PauseFor]),
@@ -201,13 +209,13 @@ pause(Call, Attrs) ->
                           {'ok', whapps_call:call()}.
 set_variable(Call, Attrs) ->
     whapps_call_command:answer(Call),
-    Props = kzt_util:xml_attributes_to_proplist(Attrs),
+    Props = kz_xml:attributes_to_proplist(Attrs),
     {'ok', kzt_translator:set_user_vars(
              [{props:get_binary_value('key', Props), props:get_binary_value('value', Props)}]
              ,Call
             )}.
 
--spec set_variables(whapps_call:call(), list()) -> whapps_call:call().
+-spec set_variables(whapps_call:call(), xml_els()) -> whapps_call:call().
 set_variables(Call, Els) when is_list(Els) ->
     lists:foldl(fun(#xmlElement{name='Variable'
                                 ,attributes=Attrs
@@ -216,14 +224,14 @@ set_variables(Call, Els) when is_list(Els) ->
                    (_, C) -> C
                 end, Call, Els).
 
--spec say(whapps_call:call(), list(), xml_attribs()) ->
+-spec say(whapps_call:call(), xml_els() | xml_texts(), xml_attribs()) ->
                  {'ok', whapps_call:call()} |
                  {'error', _, whapps_call:call()}.
 say(Call, XmlText, Attrs) ->
     whapps_call_command:answer(Call),
-    SayMe = kzt_util:xml_text_to_binary(XmlText, whapps_config:get_integer(<<"pivot">>, <<"tts_text_size">>, ?TTS_SIZE_LIMIT)),
+    SayMe = kz_xml:texts_to_binary(XmlText, whapps_config:get_integer(<<"pivot">>, <<"tts_texts_size">>, ?TTS_SIZE_LIMIT)),
 
-    Props = kzt_util:xml_attributes_to_proplist(Attrs),
+    Props = kz_xml:attributes_to_proplist(Attrs),
 
     Voice = get_voice(Props),
     Lang = get_lang(Props),
@@ -238,15 +246,15 @@ say(Call, XmlText, Attrs) ->
         N when N > 0 -> kzt_receiver:say_loop(Call, SayMe, Voice, Lang, Terminators, Engine, N)
     end.
 
--spec play(whapps_call:call(), list(), xml_attribs()) ->
+-spec play(whapps_call:call(), xml_els() | xml_texts(), xml_attribs()) ->
                   {'ok', whapps_call:call()} |
                   {'error', _, whapps_call:call()}.
 play(Call, XmlText, Attrs) ->
     whapps_call_command:answer(Call),
-    PlayMe = kzt_util:xml_text_to_binary(XmlText),
+    PlayMe = kz_xml:texts_to_binary(XmlText),
     lager:info("PLAY '~s'", [PlayMe]),
 
-    Props = kzt_util:xml_attributes_to_proplist(Attrs),
+    Props = kz_xml:attributes_to_proplist(Attrs),
     Terminators = get_terminators(Props),
 
     case loop_count(Props) of
@@ -254,18 +262,18 @@ play(Call, XmlText, Attrs) ->
         N when N > 0 -> kzt_receiver:play_loop(Call, PlayMe, Terminators, N)
     end.
 
--spec redirect(whapps_call:call(), list(), xml_attribs()) ->
+-spec redirect(whapps_call:call(), xml_els() | xml_texts(), xml_attribs()) ->
                       {'request', whapps_call:call()}.
 redirect(Call, XmlText, Attrs) ->
     whapps_call_command:answer(Call),
 
-    Props = kzt_util:xml_attributes_to_proplist(Attrs),
+    Props = kz_xml:attributes_to_proplist(Attrs),
 
     CurrentUri = kzt_util:get_voice_uri(Call),
 
-    RedirectUri = kzt_util:xml_text_to_binary(XmlText),
+    RedirectUri = kz_xml:texts_to_binary(XmlText),
 
-    Call1 = case kzt_util:xml_elements(XmlText) of
+    Call1 = case kz_xml:elements(XmlText) of
                 [] -> Call;
                 Els -> set_variables(Call, Els)
             end,
@@ -278,7 +286,7 @@ redirect(Call, XmlText, Attrs) ->
               ],
     {'request', lists:foldl(fun({F, V}, C) -> F(V, C) end, Call1, Setters)}.
 
--spec exec_gather_els(pid(), whapps_call:call(), list()) -> 'ok'.
+-spec exec_gather_els(pid(), whapps_call:call(), xml_els()) -> 'ok'.
 exec_gather_els(_Parent, _Call, []) ->
     lager:info("finished gather sub elements");
 exec_gather_els(Parent, Call, [SubAction|SubActions]) ->
@@ -290,7 +298,7 @@ exec_gather_els(Parent, Call, [SubAction|SubActions]) ->
         {'ok', Call1} -> exec_gather_els(Parent, Call1, SubActions)
     end.
 
--spec exec_gather_els(whapps_call:call(), list()) ->
+-spec exec_gather_els(whapps_call:call(), xml_els()) ->
                              {'ok', whapps_call:call()}.
 exec_gather_els(Call, SubActions) ->
     {_Pid, _Ref}=PidRef =
@@ -298,13 +306,13 @@ exec_gather_els(Call, SubActions) ->
     lager:debug("started to exec gather els: ~p(~p)", [_Pid, _Ref]),
     {'ok', kzt_util:set_gather_pidref(PidRef, Call)}.
 
--spec gather(whapps_call:call(), list(), xml_attribs()) ->
+-spec gather(whapps_call:call(), xml_els(), xml_attribs()) ->
                     kzt_receiver:collect_dtmfs_return().
 gather(Call, [], Attrs) -> gather(Call, Attrs);
 gather(Call, SubActions, Attrs) ->
     lager:info("GATHER: exec sub actions"),
     {'ok', C} = exec_gather_els(kzt_util:clear_digits_collected(Call)
-                                ,kzt_util:xml_elements(SubActions)
+                                ,kz_xml:elements(SubActions)
                                ),
     gather(C, Attrs).
 
@@ -313,7 +321,7 @@ gather(Call, SubActions, Attrs) ->
 gather(Call, Attrs) ->
     whapps_call_command:answer(Call),
 
-    Props = kzt_util:xml_attributes_to_proplist(Attrs),
+    Props = kz_xml:attributes_to_proplist(Attrs),
 
     Timeout = timeout_s(Props, 5) * 1000,
     FinishKey = finish_dtmf(Props),
@@ -330,7 +338,6 @@ gather(Call, FinishKey, Timeout, Props, N) ->
         {'ok', 'timeout', C} -> gather_finished(C, Props);
         {'ok', 'dtmf_finish', C} -> gather_finished(C, Props);
         {'ok', C} -> gather_finished(C, Props);
-        {'error', _E, _C}=ERR -> ERR;
         {'stop', _C}=STOP -> STOP
     end.
 
@@ -365,7 +372,7 @@ gather_finished(Call, Props) ->
     end.
 
 record_call(Call, Attrs) ->
-    Props = kzt_util:xml_attributes_to_proplist(Attrs),
+    Props = kz_xml:attributes_to_proplist(Attrs),
     Timeout = timeout_s(Props, 5),
     FinishOnKey = get_finish_key(Props),
     MaxLength = get_max_length(Props),
@@ -408,13 +415,14 @@ finish_record_call(Call, Props, MediaName) ->
                 Setters;
             {'true', 'local'} ->
                 {'ok', MediaJObj} = kzt_receiver:recording_meta(Call, MediaName),
-                StoreUrl = wapi_dialplan:store_url(Call, MediaJObj),
+                StoreUrl = wapi_dialplan:local_store_url(Call, MediaJObj),
 
                 lager:info("storing ~s locally to ~s", [MediaName, StoreUrl]),
 
                 whapps_call_command:store(MediaName, StoreUrl, Call),
                 [{fun kzt_util:set_recording_url/2, StoreUrl}
-                 | Setters];
+                 | Setters
+                ];
             {'true', Url} ->
                 StoreUrl = wapi_dialplan:offsite_store_url(Url, MediaName),
 
@@ -516,8 +524,10 @@ pause_for(Props) ->
         N when is_integer(N), N > 3600 -> 3600000
     end.
 
-action_url(Props) -> props:get_value('action', Props).
+-spec action_url(wh_proplist()) -> api_binary().
+action_url(Props) -> props:get_binary_value('action', Props).
 
+-spec reject_prompt(wh_proplist()) -> api_binary().
 reject_prompt(Props) -> props:get_binary_value('prompt', Props).
 
 -spec timeout_s(wh_proplist()) -> pos_integer().
@@ -535,6 +545,7 @@ num_digits(Props) ->
         N when is_integer(N), N > 0 -> N
     end.
 
+-spec reject_reason(wh_proplist()) -> ne_binary().
 reject_reason(Props) ->
     case props:get_binary_value('reason', Props) of
         'undefined' -> <<"rejected">>;
@@ -542,8 +553,10 @@ reject_reason(Props) ->
         <<"busy">> -> <<"busy">>
     end.
 
+-spec reject_code(ne_binary()) -> ne_binary().
 reject_code(<<"busy">>) -> <<"486">>;
 reject_code(<<"rejected">>) -> <<"503">>.
 
+-spec reject_status(ne_binary()) -> ne_binary().
 reject_status(<<"486">>) -> ?STATUS_BUSY;
 reject_status(<<"503">>) -> ?STATUS_NOANSWER.

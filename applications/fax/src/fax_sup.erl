@@ -14,6 +14,7 @@
 -export([start_link/0]).
 -export([cache_proc/0]).
 -export([listener_proc/0]).
+-export([smtp_sessions/0]).
 -export([init/1]).
 
 %% Helper macro for declaring children of supervisor
@@ -28,6 +29,8 @@
                    ,?CACHE('fax_cache')
                    ,?WORKER('fax_jobs')
                    ,?SUPER('fax_requests_sup')
+                   ,?SUPER('fax_xmpp_sup')
+                   ,?WORKER('fax_shared_listener')
                    ,?WORKER('fax_listener')
                    ,?WORKER_ARGS('gen_smtp_server',['fax_smtp'
                                                     ,[[{'port', whapps_config:get_integer(?CONFIG_CAT, <<"smtp_port">>, 19025)}]]
@@ -57,6 +60,13 @@ listener_proc() ->
     [P] = [P || {Mod, P, _, _} <- supervisor:which_children(?MODULE),
                 Mod =:= 'fax_listener'],
     {'ok', P}.
+
+-spec smtp_sessions() -> any().
+smtp_sessions() ->
+    [P] = [P || {Mod, P, _, _} <- supervisor:which_children(?MODULE),
+                Mod =:= 'gen_smtp_server'],
+    Sessions = gen_smtp_server:sessions(P),
+    length(Sessions).
 
 %% ===================================================================
 %% Supervisor callbacks
