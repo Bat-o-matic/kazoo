@@ -237,6 +237,7 @@
                                ,{<<"intercept_unanswered_only">>, <<"intercept_unanswered_only">>}
                                ,{<<"conference_member_nospeak_relational">>, <<"conference_member_nospeak_relational">>}
                                ,{<<"conference_member_nospeak_check">>, <<"conference_member_nospeak_check">>}
+                               ,{<<"X-Billing-Id">>, <<"sip_h_XBillingId">>}
                               ]).
 
 %% [{FreeSWITCH-App-Name, Kazoo-App-Name}]
