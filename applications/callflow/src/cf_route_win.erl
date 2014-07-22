@@ -183,6 +183,7 @@ update_ccvs(Call) ->
               [{<<"Hold-Media">>, cf_attributes:moh_attributes(<<"media_id">>, Call)}
                ,{<<"Caller-ID-Name">>, CIDName}
                ,{<<"Caller-ID-Number">>, CIDNumber}
+               ,{<<"X-Billing-Id">>, CIDNumber}
                | get_incoming_security(Call)
               ]),
     whapps_call:set_custom_channel_vars(Props, Call).
