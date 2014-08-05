@@ -78,6 +78,7 @@
                           ,'cb_schemas'
                           ,'cb_service_plans'
                           ,'cb_services'
+                          ,'cb_show_modified'
                           ,'cb_simple_authz'
                           ,'cb_temporal_rules'
                           ,'cb_token_auth'
