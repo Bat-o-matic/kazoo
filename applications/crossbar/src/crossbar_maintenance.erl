@@ -70,6 +70,8 @@ migrate() ->
                    ,fun(L) -> sets:add_element(<<"cb_metaflows">>, L) end
                    ,fun(L) -> sets:add_element(<<"cb_sup">>, L) end
                    ,fun(L) -> sets:add_element(<<"cb_faxboxes">>, L) end
+                   ,fun(L) -> sets:add_element(<<"cb_port_requests">>, L) end
+                   ,fun(L) -> sets:add_element(<<"cb_show_modified">>, L) end
                   ],
     UpdatedModules = sets:to_list(lists:foldr(fun(F, L) -> F(L) end, StartModules, XbarUpdates)),
     _ = whapps_config:set_default(<<"crossbar">>, <<"autoload_modules">>, UpdatedModules),
