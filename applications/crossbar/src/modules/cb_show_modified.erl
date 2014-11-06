@@ -47,7 +47,10 @@ validate(#cb_context{req_verb = ?HTTP_POST}=Context) ->
     update_modified(Context);
 validate(#cb_context{req_verb = ?HTTP_DELETE}=Context) ->
     update_modified(Context).
-validate(Context, _) -> ?MODULE:validate(Context).
+validate(Context, _) -> validate(Context).
+validate(Context, _, _) -> validate(Context).
+validate(Context, _, _, _) -> validate(Context).
+validate(Context, _, _, _, _) -> validate(Context).
 
 
 -spec update_modified(cb_context:context()) -> cb_context:context().
