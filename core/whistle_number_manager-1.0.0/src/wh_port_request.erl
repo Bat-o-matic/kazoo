@@ -137,13 +137,7 @@ charge_for_port(_JObj, AccountId) ->
 -spec completed_port(wh_json:object()) ->
                             transition_response().
 completed_port(PortReq) ->
-    case charge_for_port(PortReq) of
-        'ok' ->
-            lager:debug("successfully charged for port, transtitioning numbers to active"),
-            transition_numbers(PortReq);
-        'error' ->
-            throw({'error', 'failed_to_charge'})
-    end.
+    transition_numbers(PortReq).
 
 -spec transition_numbers(wh_json:object()) ->
                                 transition_response().
@@ -152,9 +146,7 @@ transition_numbers(PortReq) ->
     PortOps = [enable_number(N) || N <- Numbers],
     case lists:all(fun(X) -> wh_util:is_true(X) end, PortOps) of
         'true' ->
-            lager:debug("all numbers ported, removing from port req"),
-            ClearedPortRequest = clear_numbers_from_port(PortReq),
-            {'ok', ClearedPortRequest};
+            {'ok', PortReq};
         'false' ->
             lager:debug("failed to transition numbers: ~p", [PortOps]),
             {'error', PortReq}

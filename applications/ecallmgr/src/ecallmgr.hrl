@@ -248,6 +248,7 @@
                                ,{<<"Fax-Doc-DB">>, <<"fax_doc_database">>}
                                ,{<<"default_langauge">>, <<"default_language">>}
                                ,{<<"Default-Language">>, <<"default_language">>}
+                               ,{<<"X-Billing-Id">>, <<"sip_h_XBillingId">>}
                               ]).
 
 %% [{FreeSWITCH-App-Name, Kazoo-App-Name}]

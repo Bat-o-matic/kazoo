@@ -70,6 +70,21 @@ handle_req(JObj, _Props) ->
             wh_util:log_stacktrace(ST)
     end.
 
+-spec is_notice_enabled(wh_json:object()) -> boolean().
+is_notice_enabled(JObj) ->
+    case  wh_json:get_value([<<"notifications">>,
+                             <<"outbound_fax_error_to_email">>,
+                             <<"enabled">>
+                            ], JObj)
+    of
+        'undefined' -> is_notice_enabled_default();
+        Value -> wh_util:is_true(Value)
+    end.
+
+-spec is_notice_enabled_default() -> boolean().
+is_notice_enabled_default() ->
+    whapps_config:get_is_true(?MOD_CONFIG_CAT, <<"default_enabled">>, 'true').
+
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
