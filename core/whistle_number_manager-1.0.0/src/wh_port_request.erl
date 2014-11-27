@@ -152,21 +152,6 @@ transition_numbers(PortReq) ->
             {'error', PortReq}
     end.
 
--spec clear_numbers_from_port(wh_json:object()) -> wh_json:object().
-clear_numbers_from_port(PortReq) ->
-    case couch_mgr:save_doc(?KZ_PORT_REQUESTS_DB
-                            ,wh_json:set_value(<<"numbers">>, wh_json:new(), PortReq)
-                           )
-    of
-        {'ok', PortReq1} -> lager:debug("port numbers cleared"), PortReq1;
-        {'error', 'conflict'} ->
-            lager:debug("port request doc was updated before we could re-save"),
-            PortReq;
-        {'error', _E} ->
-            lager:debug("failed to clear numbers: ~p", [_E]),
-            PortReq
-    end.
-
 -spec enable_number(ne_binary()) -> boolean().
 enable_number(N) ->
     try wh_number_manager:ported(N) of

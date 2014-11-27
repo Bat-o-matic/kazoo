@@ -647,9 +647,9 @@ can_update_port_request(Context) ->
 
 can_update_port_request(_Context, ?PORT_WAITING) ->
     'true';
-can_update_port_request(Context, ?PORT_READY) ->
+can_update_port_request(Context, ?PORT_SUBMITTED) ->
     cb_modules_util:is_superduper_admin(cb_context:auth_account_id(Context));
-can_update_port_request(Context, ?PORT_PROGRESS) ->
+can_update_port_request(Context, ?PORT_SCHEDULED) ->
     cb_modules_util:is_superduper_admin(cb_context:auth_account_id(Context));
 can_update_port_request(_Context, ?PORT_COMPLETE) ->
     'false';
