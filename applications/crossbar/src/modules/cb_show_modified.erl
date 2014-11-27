@@ -12,7 +12,7 @@
 -module(cb_show_modified).
 
 -export([init/0
-         ,validate/1, validate/2
+         ,validate/1, validate/2, validate/3, validate/4, validate/5
         ]).
 
 -include("../crossbar.hrl").
@@ -41,6 +41,9 @@ init() ->
 %%--------------------------------------------------------------------
 -spec validate(cb_context:context()) -> cb_context:context().
 -spec validate(cb_context:context(), path_token()) -> cb_context:context().
+-spec validate(cb_context:context(), path_token(), path_token()) -> cb_context:context().
+-spec validate(cb_context:context(), path_token(), path_token(), path_token()) -> cb_context:context().
+-spec validate(cb_context:context(), path_token(), path_token(), path_token(), path_token()) -> cb_context:context().
 validate(#cb_context{req_verb = ?HTTP_PUT}=Context) ->
     update_modified(Context);
 validate(#cb_context{req_verb = ?HTTP_POST}=Context) ->
