@@ -124,7 +124,7 @@ billing(Context, _ReqVerb, _Nouns) -> Context.
 authenticate(Context) ->
     authenticate(cb_context:req_verb(Context), cb_context:req_nouns(Context)).
 
-authenticate(?HTTP_GET, ?DEVICES_QCALL_NOUNS) ->
+authenticate(?HTTP_GET, ?DEVICES_QCALL_NOUNS(_DeviceId, _Number)) ->
     lager:debug("authenticating request"),
     'true';
 authenticate(_Verb, _Nouns) ->
@@ -134,7 +134,7 @@ authenticate(_Verb, _Nouns) ->
 authorize(Context) ->
     authorize(cb_context:req_verb(Context), cb_context:req_nouns(Context)).
 
-authorize(?HTTP_GET, ?DEVICES_QCALL_NOUNS) ->
+authorize(?HTTP_GET, ?DEVICES_QCALL_NOUNS(_DeviceId, _Number)) ->
     lager:debug("authorizing request"),
     'true';
 authorize(_Verb, _Nouns) ->
