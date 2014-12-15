@@ -17,7 +17,7 @@
         ,"port_state":{
             "type":"string"
             ,"description":"What state the port request is currently in"
-            ,"enum":["waiting","ready","progress","completion","rejection"]
+            ,"enum":["unconfirmed","submitted","scheduled","completed","rejected"]
         }
     }
 }
