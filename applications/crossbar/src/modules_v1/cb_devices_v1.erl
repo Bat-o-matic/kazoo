@@ -125,7 +125,7 @@ process_billing(Context, _Nouns, _Verb) -> Context.
 -spec authenticate(cb_context:context()) -> 'true'.
 authenticate(Context) ->
     authenticate(cb_context:req_nouns(Context), cb_context:req_verb(Context)).
-authenticate(?DEVICES_QCALL_NOUNS, ?HTTP_GET) ->
+authenticate(?DEVICES_QCALL_NOUNS(_DeviceId, _Number), ?HTTP_GET) ->
     lager:debug("authenticating request"),
     'true';
 authenticate(_Nouns, _Verb) -> 'false'.
@@ -133,7 +133,7 @@ authenticate(_Nouns, _Verb) -> 'false'.
 -spec authorize(cb_context:context()) -> 'true'.
 authorize(Context) ->
     authorize(cb_context:req_nouns(Context), cb_context:req_verb(Context)).
-authorize(?DEVICES_QCALL_NOUNS, ?HTTP_GET) ->
+authorize(?DEVICES_QCALL_NOUNS(_DeviceId, _Number), ?HTTP_GET) ->
     lager:debug("authorizing request"),
     'true';
 authorize(_Nouns, _Verb) -> 'false'.
