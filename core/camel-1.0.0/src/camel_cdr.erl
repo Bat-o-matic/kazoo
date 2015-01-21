@@ -11,7 +11,7 @@
 -export([url/0]).
 -export([new/1]).
 -export([get_id/1]).
--export([query/1]).
+-export([search/1]).
 -export([json_to_record/1]).
 -export([record_to_json/1]).
 
@@ -62,8 +62,8 @@ get_id(CdrId) ->
 %% Find a cdr by id
 %% @end
 %%--------------------------------------------------------------------
--spec query(ne_binaries()) -> cdr().
-query(CdrIds) ->
+-spec search(ne_binaries()) -> cdr().
+search(CdrIds) ->
     Url = url() ++ "search",
     Ids = wh_json:from_list(CdrIds),
     Json = camel_request:post(Url, Ids),

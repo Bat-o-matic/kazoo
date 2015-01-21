@@ -293,12 +293,12 @@ load_cdr(CDRId, Context) ->
 
 %% Multiple CDRs:
 %% Extract call IDs from cdrs, accumulate into list
-%% Call camel_cdr:find(List)
+%% Call camel_cdr:search(List)
 %% Merge results.
 
 -spec find_camel_cdrs(ne_binaries(), cb_context:context()) -> cb_context:context().
 find_camel_cdrs(CdrList, Context) when is_list(CdrList) ->
-    try camel_cdr:find(CdrList) of
+    try camel_cdr:search(CdrList) of
         Cdrs ->
             cb_context:set_resp_data(Context, [Cdr || C <- cb_context:resp_data(Context), Cdr = merge_cdr_summary_results(C, Cdrs)])
     catch
@@ -312,7 +312,7 @@ find_camel_cdrs(CdrList, Context) when is_list(CdrList) ->
 %% Merge results.
 -spec find_camel_cdr(ne_binary(), cb_context:context()) -> cb_context:context().
 find_camel_cdr(CallId, Context) ->
-    try camel_cdr:find([CallId]) of
+    try camel_cdr:search([CallId]) of
         [Cdr] ->
             cb_context:set_resp_data(Context, merge_cdr_results(Cdr, cb_context:resp_data(Context)))
     catch
