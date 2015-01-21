@@ -1,0 +1,12 @@
+{application, camel,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { camel_app, []}},
+  {env, []}
+ ]}.

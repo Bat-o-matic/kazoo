@@ -20,8 +20,11 @@
          ,content_types_provided/1
          ,validate/1, validate/2
         ]).
+%% For debugging
+-export([find_camel_cdrs/2]).
 
 -include("../crossbar.hrl").
+-include_lib("camel/include/camel.hrl").
 
 -define(MOD_CONFIG_CAT, <<(?CONFIG_CAT)/binary, ".cdrs">>).
 
@@ -286,3 +289,52 @@ load_cdr(<<Year:4/binary, Month:2/binary, "-", _/binary>> = CDRId, Context) ->
 load_cdr(CDRId, Context) ->
     lager:debug("error loading cdr by id ~p", [CDRId]),
     crossbar_util:response('error', <<"could not find cdr with supplied id">>, 404, Context).
+
+
+%% Multiple CDRs:
+%% Extract call IDs from cdrs, accumulate into list
+%% Call camel_cdr:find(List)
+%% Merge results.
+
+-spec find_camel_cdrs(ne_binaries(), cb_context:context()) -> cb_context:context().
+find_camel_cdrs(CdrList, Context) when is_list(CdrList) ->
+    try camel_cdr:find(CdrList) of
+        Cdrs ->
+            cb_context:set_resp_data(Context, [Cdr || C <- cb_context:resp_data(Context), Cdr = merge_cdr_summary_results(C, Cdrs)])
+    catch
+        'throw':{Error, Reason} ->
+            crossbar_util:response('error', wh_util:to_binary(Error), 500, Reason, Context)
+    end.
+
+%% Single CDR:
+%% Extract call IDs from cdrs, accumulate into list
+%% Call camel_cdr:get_id(CallId)
+%% Merge results.
+-spec find_camel_cdr(ne_binary(), cb_context:context()) -> cb_context:context().
+find_camel_cdr(CallId, Context) ->
+    try camel_cdr:find([CallId]) of
+        [Cdr] ->
+            cb_context:set_resp_data(Context, merge_cdr_results(Cdr, cb_context:resp_data(Context)))
+    catch
+        'throw':{Error, Reason} ->
+            crossbar_util:response('error', wh_util:to_binary(Error), 500, Reason, Context)
+    end.
+
+-spec merge_cdr_summary_results(camel_cdr:camel_cdr(), wh_json:objects()) -> wh_json:objects().
+merge_cdr_summary_results(Cdr, Records) when is_list(Records) ->
+    CallId = wh_json:get_binary(<<"call_id">>, Cdr),
+    case lists:dropwhile(fun(X) ->
+            wh_json:get_binary(<<"call_id">>, X) =:= CallId
+        end, Records) of
+        [] -> Cdr;
+        [X | _] -> wh_json:set_value(<<"price">>, X#camel_cdr.price, Cdr)
+    end.
+
+-spec merge_cdr_results(camel_cdr:camel_cdr(), wh_json:object()) -> wh_json:object().
+merge_cdr_results(Cdr, Record) ->
+    case wh_json:is_json_object(Record) of
+        'true' -> wh_json:merge_jobjs(Cdr, Record);
+        'false' -> Cdr
+    end.
+
+%% Check that the arrays work with setting resp data (do I need to wrap in JSON_WRAPPER?)
