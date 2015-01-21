@@ -13,7 +13,7 @@
 -export([get_id/1]).
 -export([search/1]).
 -export([json_to_record/1]).
--export([record_to_json/1]).
+-export([record_to_json/1, record_to_json/2]).
 
 -export([transform_cdr/1]).
 
@@ -65,7 +65,7 @@ get_id(CdrId) ->
 -spec search(ne_binaries()) -> cdr().
 search(CdrIds) ->
     Url = url() ++ "search",
-    Ids = wh_json:from_list(CdrIds),
+    Ids = wh_json:encode(wh_json:from_list(CdrIds)),
     Json = camel_request:post(Url, Ids),
     [Cdr || JObj <- Json, Cdr = json_to_record(transform_cdr(JObj))].
 
@@ -97,7 +97,10 @@ json_to_record(JObj) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec record_to_json(cdr()) -> wh_json:object().
-record_to_json(Cdr) ->
+-spec record_to_json(cdr(), boolean()) -> wh_json:object() | text().
+record_to_json(Cdr) -> record_to_json(Cdr, 'false').
+
+record_to_json(Cdr, ToString) ->
     Props = [{<<"call_id">>, Cdr#camel_cdr.call_id}
              ,{<<"call_direction">>, Cdr#camel_cdr.call_direction}
              ,{<<"billing_party">>, Cdr#camel_cdr.billing_party}
@@ -107,7 +110,14 @@ record_to_json(Cdr) ->
              ,{<<"duration">>, Cdr#camel_cdr.duration}
              ,{<<"price">>, Cdr#camel_cdr.price}
             ],
-    wh_json:from_list(props:filter_undefined(Props)).
+    Json = wh_json:from_list(props:filter_undefined(Props)),
+    case ToString of
+        'true' ->
+            wh_json:encode(Json);
+        'false' ->
+            Json
+    end.
+
 
 transform_cdr(Cdr) ->
     [Called|_] = re:split(wh_json:get_value(<<"CalledStationId">>, Cdr), "@"),

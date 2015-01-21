@@ -15,8 +15,8 @@
 
 -define(CAMEL_DEBUG, whapps_config:get_is_true(<<"camel">>, <<"debug">>, false)).
 
--define(CAMEL_SERVER_URL, whapps_config:get_binary(<<"camel">>, <<"default">>, <<"url">>, <<"localhost:9091/chump">>)).
--define(CAMEL_SERVER_VERSION, whapps_config:get_binary(<<"camel">>, <<"default">>, <<"version">>, <<"v1">>)).
+-define(CAMEL_SERVER_URL, whapps_config:get_binary(<<"camel">>, [<<"default">>, <<"url">>], "localhost:9091/chump")).
+-define(CAMEL_SERVER_VERSION, whapps_config:get_binary(<<"camel">>, [<<"default">>, <<"version">>], "v1")).
 
 -record(camel_cdr, {call_id :: api_binary()
                     ,call_direction :: api_binary() %%% ?

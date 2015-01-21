@@ -109,7 +109,7 @@ do_request(Method, Path, Body) ->
         {ok, Code, _, Response} ->
             verbose_debug("Response:~n~p~n~s~n", [Code, Response]),
             lager:debug("braintree JSON response(~pms)", [timer:now_diff(erlang:now(), StartTime) div 1000]),
-            Response;
+            wh_json:decode(Response);
         {error, _R} ->
             verbose_debug("Response:~nerror~n~p~n", [_R]),
             lager:debug("camel request error(~pms): ~p", [timer:now_diff(erlang:now(), StartTime) div 1000, _R]),
