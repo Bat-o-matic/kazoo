@@ -65,7 +65,7 @@ get_id(CdrId) ->
 -spec search(ne_binaries()) -> cdr().
 search(CdrIds) ->
     Url = url() ++ "search",
-    Ids = wh_json:encode(wh_json:from_list(CdrIds)),
+    Ids = wh_json:encode(CdrIds),
     Json = camel_request:post(Url, Ids),
     [Cdr || JObj <- Json, Cdr = json_to_record(transform_cdr(JObj))].
 

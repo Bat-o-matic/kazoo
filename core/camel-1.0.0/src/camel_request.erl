@@ -68,9 +68,9 @@ do_request(Method, Path, Body) ->
     StartTime = erlang:now(),
     lager:debug("making ~s request to camel ~s", [Method, Path]),
     Url = lists:flatten(["http://"
-                         ,?CAMEL_SERVER_URL
+                         ,binary_to_list(?CAMEL_SERVER_URL)
                          ,"/"
-                         ,?CAMEL_SERVER_VERSION
+                         ,binary_to_list(?CAMEL_SERVER_VERSION)
                          ,Path
                         ]),
     Headers = [{"Accept", "application/json"}
@@ -125,8 +125,8 @@ do_request(Method, Path, Body) ->
 -spec verbose_debug/2 :: (string(), [term()]) -> 'ok'.
 verbose_debug(Format, Args) ->
     case ?CAMEL_DEBUG of
-        false -> ok;
-        true -> 
+        'false' -> ok;
+        'true' ->
             _ = file:write_file("/tmp/camel.xml", io_lib:format(Format, Args), [append]),
             ok
     end.
