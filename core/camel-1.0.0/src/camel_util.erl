@@ -17,8 +17,8 @@
 -export([error_upgrade_required/0]).
 -export([error_server_error/0]).
 -export([error_maintenance/0]).
--export([error_api/1]).
 -export([error_io_fault/0]).
+-export([response_error/1]).
 
 -include_lib("camel/include/camel.hrl").
 
