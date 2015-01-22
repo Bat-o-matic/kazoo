@@ -322,9 +322,9 @@ find_camel_cdr(CallId, Context) ->
 
 -spec merge_cdr_summary_results(camel_cdr:camel_cdr(), wh_json:objects()) -> wh_json:objects().
 merge_cdr_summary_results(Cdr, Records) when is_list(Records) ->
-    CallId = wh_json:get_binary(<<"call_id">>, Cdr),
+    CallId = wh_json:get_binary_value(<<"call_id">>, Cdr),
     case lists:dropwhile(fun(X) ->
-            wh_json:get_binary(<<"call_id">>, X) =:= CallId
+            wh_json:get_binary_value(<<"call_id">>, X) =:= CallId
         end, Records) of
         [] -> Cdr;
         [X | _] -> wh_json:set_value(<<"price">>, X#camel_cdr.price, Cdr)
