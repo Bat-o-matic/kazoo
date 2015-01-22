@@ -67,9 +67,9 @@ search(CdrIds) ->
     Url = url() ++ "search",
     Ids = wh_json:encode({[{"ids", CdrIds}]}),
     case camel_request:post(Url, Ids) of
-        #camel_cdr{code = 200, data = Data} ->
+        #camel_response{code = 200, data = Data} ->
             [Cdr || JObj <- Data, Cdr = json_to_record(transform_cdr(JObj))];
-        #camel_cdr{} = Resp ->
+        #camel_response{} = Resp ->
             camel_util:response_error(Resp)
     end.
 
