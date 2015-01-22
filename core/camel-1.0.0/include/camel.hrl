@@ -44,14 +44,8 @@
 -type camel_subscription() :: #camel_subscription{}.
 -type camel_subscriptions() :: [camel_subscription(),...] | [].
 
--record(camel_error, {code :: api_binary()
-                      ,message :: api_binary()
-                      ,attribute :: api_binary()
-                     }).
--type camel_error() :: #camel_error{}.
--type camel_errors() :: [#camel_error{},...] | [].
-
--record(camel_api_error, {errors = [] :: camel_errors()
-                       ,message :: api_binary()
-                      }).
--type camel_api_error() :: #camel_api_error{}.
+-record(camel_response, {code :: non_neg_integer()
+                         ,message :: api_binary()
+                         ,data :: term()
+                        }).
+-type camel_response() :: #camel_response{}.

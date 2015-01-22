@@ -8,8 +8,8 @@
 %%%-------------------------------------------------------------------
 -module(camel_util).
 
--export([camel_error_to_json/1]).
--export([camel_api_error_to_json/1]).
+-export([response_to_json/1]).
+-export([response_from_json/1]).
 
 -export([error_authentication/0]).
 -export([error_authorization/0]).
@@ -34,26 +34,20 @@
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec camel_error_to_json/1 :: (#camel_error{}) -> wh_json:object().
-camel_error_to_json(#camel_error{}=BtError) ->
-    Props = [{<<"code">>, BtError#camel_error.code}
-             ,{<<"message">>, BtError#camel_error.message}
-             ,{<<"attribute">>, BtError#camel_error.attribute}
+-spec response_to_json/1 :: (#camel_response{}) -> wh_json:object().
+response_to_json(#camel_response{}=CamelResp) ->
+    Props = [{<<"code">>, CamelResp#camel_response.code}
+             ,{<<"message">>, CamelResp#camel_response.message}
+             ,{<<"data">>, CamelResp#camel_response.data}
             ],
     wh_json:from_list([KV || {_, V}=KV <- Props, V =/= undefined]).
 
-%%--------------------------------------------------------------------
-%% @public
-%% @doc
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec camel_api_error_to_json/1 :: (#camel_api_error{}) -> wh_json:object().
-camel_api_error_to_json(#camel_api_error{}=BtApiError) ->
-    Props = [{<<"errors">>, [camel_error_to_json(Error) || Error <- BtApiError#camel_api_error.errors]}
-             ,{<<"message">>, BtApiError#camel_api_error.message}
-            ],
-    wh_json:from_list([KV || {_, V}=KV <- Props, V =/= undefined]).
+-spec response_from_json/1 :: (#camel_response{}) -> wh_json:object().
+response_from_json(Resp) ->
+    #camel_response{code = wh_json:get_value(<<"code">>, Resp)
+                    ,message = wh_json:get_value(<<"code">>, Resp)
+                    ,data = wh_json:get_value(<<"data">>, Resp)
+                   }.
 
 %%--------------------------------------------------------------------
 %% @public
@@ -133,20 +127,14 @@ error_maintenance() ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec error_api/1 :: (#camel_api_error{}) -> no_return().
-error_api(#camel_api_error{}=ApiError) ->
-    JObj = camel_api_error_to_json(ApiError),
-    lager:debug("~s", [wh_json:encode(JObj)]),
-    throw({api_error, wh_json:from_list([{<<"api_error">>, JObj}])}).
-
-%%--------------------------------------------------------------------
-%% @public
-%% @doc
-%%
-%% @end
-%%--------------------------------------------------------------------
 -spec error_io_fault/0 :: () -> no_return().
 error_io_fault() ->
     Error = <<"Unable to establish communication with card processor">>,
     lager:debug("~s", [Error]),
-    throw({io_fault, wh_json:from_list([{<<"io_fault">>, Error}])}).   
+    throw({io_fault, wh_json:from_list([{<<"io_fault">>, Error}])}).
+
+-spec response_error/1 :: (camel_response()) -> no_return().
+response_error(Resp) ->
+    Error = Resp#camel_response.message,
+    lager:debug("Camel response error ~s", [Error]),
+    throw({response_error, wh_json:from_list([{<<"response_error">>, Resp#camel_response.message}])}).

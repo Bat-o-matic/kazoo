@@ -62,12 +62,16 @@ get_id(CdrId) ->
 %% Find a cdr by id
 %% @end
 %%--------------------------------------------------------------------
--spec search(ne_binaries()) -> cdr().
+-spec search(ne_binaries()) -> cdrs().
 search(CdrIds) ->
     Url = url() ++ "search",
-    Ids = wh_json:encode(CdrIds),
-    Json = camel_request:post(Url, Ids),
-    [Cdr || JObj <- Json, Cdr = json_to_record(transform_cdr(JObj))].
+    Ids = wh_json:encode({[{"ids", CdrIds}]}),
+    case camel_request:post(Url, Ids) of
+        #camel_cdr{code = 200, data = Data} ->
+            [Cdr || JObj <- Data, Cdr = json_to_record(transform_cdr(JObj))];
+        #camel_cdr{} = Resp ->
+            camel_util:response_error(Resp)
+    end.
 
 %%--------------------------------------------------------------------
 %% @public
