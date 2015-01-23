@@ -12,6 +12,7 @@
 -export([new/1]).
 -export([get_id/1]).
 -export([search/1]).
+-export([is_camel_cdr/1]).
 -export([json_to_record/1]).
 -export([record_to_json/1, record_to_json/2]).
 
@@ -68,7 +69,7 @@ search(CdrIds) ->
     Ids = wh_json:encode({[{"ids", CdrIds}]}),
     case camel_request:post(Url, Ids) of
         #camel_response{code = 200, data = Data} ->
-            [Cdr || JObj <- Data, Cdr = json_to_record(transform_cdr(JObj))];
+            [json_to_record(transform_cdr(JObj)) || JObj <- Data];
         #camel_response{} = Resp ->
             camel_util:response_error(Resp)
     end.
@@ -79,6 +80,8 @@ search(CdrIds) ->
 %% Convert a given json object into a record
 %% @end
 %%--------------------------------------------------------------------
+is_camel_cdr(#camel_cdr{}=Cdr)->'true'
+is_camel_cdr(_)->'false'
 
 %% Need to convert parameter names
 -spec json_to_record(api_object()) -> cdr().
@@ -124,15 +127,15 @@ record_to_json(Cdr, ToString) ->
 
 
 transform_cdr(Cdr) ->
-    [Called|_] = re:split(wh_json:get_value(<<"CalledStationId">>, Cdr), "@"),
-    [Calling|_] = re:split(wh_json:get_value(<<"CallingStationId">>, Cdr), "@"),
+    [Called|_] = re:split(wh_json:get_value(<<"CalledStationId">>, Cdr, <<"anonymous">>), "@"),
+    [Calling|_] = re:split(wh_json:get_value(<<"CallingStationId">>, Cdr, <<"anonymous">>), "@"),
     Props = [{<<"billing_party">>, Calling}
              ,{<<"other_party">>, Called}
             ],
     New = lists:foldl(fun({OldK, NewK}, Acc) ->
                     wh_json:set_value(NewK, wh_json:get_value(OldK, Cdr), Acc) 
                 end, wh_json:from_list(Props), ?CAMEL_CDR_TRANSFORM),
-    case re:split(wh_json:get_value("Realm", Cdr), <<"\.">>) of
+    case re:split(wh_json:get_value(<<"Realm">>, Cdr, <<"conversant.co.nz">>), <<"\.">>) of
         [<<"inbound">>|_] -> wh_json:set_value(<<"call_direction">>, <<"inbound">>, New);
         _ -> wh_json:set_value(<<"call_direction">>, <<"outbound">>, New)
     end.

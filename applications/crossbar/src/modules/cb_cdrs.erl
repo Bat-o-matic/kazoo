@@ -20,8 +20,6 @@
          ,content_types_provided/1
          ,validate/1, validate/2
         ]).
-%% For debugging
--export([find_camel_cdrs/2]).
 
 -include("../crossbar.hrl").
 -include_lib("camel/include/camel.hrl").
@@ -99,9 +97,9 @@ content_types_provided(#cb_context{}=Context) ->
 -spec validate(cb_context:context()) -> cb_context:context().
 -spec validate(cb_context:context(), path_token()) -> cb_context:context().
 validate(#cb_context{req_verb = ?HTTP_GET}=Context) ->
-    load_cdr_summary(Context).
+    find_camel_cdrs(load_cdr_summary(Context)).
 validate(#cb_context{req_verb = ?HTTP_GET}=Context, CDRId) ->
-    load_cdr(CDRId, Context).
+    find_camel_cdr(load_cdr(CDRId, Context)).
 
 %%--------------------------------------------------------------------
 %% @private
@@ -295,12 +293,15 @@ load_cdr(CDRId, Context) ->
 %% Extract call IDs from cdrs, accumulate into list
 %% Call camel_cdr:search(List)
 %% Merge results.
+-spec find_camel_cdrs(cb_context:context()) -> cb_context:context().
+find_camel_cdrs(Context) ->
+    find_camel_cdrs([wh_json:get_binary_value(<<"call_id">>, JObj) || JObj <- cb_context:resp_data(Context)], Context).
 
 -spec find_camel_cdrs(ne_binaries(), cb_context:context()) -> cb_context:context().
 find_camel_cdrs(CdrList, Context) when is_list(CdrList) ->
     try camel_cdr:search(CdrList) of
         Cdrs ->
-            cb_context:set_resp_data(Context, [Cdr || C <- cb_context:resp_data(Context), Cdr = merge_cdr_summary_results(C, Cdrs)])
+            cb_context:set_resp_data(Context, [merge_cdr_summary_results(Cdr, Cdrs) || Cdr <- cb_context:resp_data(Context)])
     catch
         'throw':{Error, Reason} ->
             crossbar_util:response('error', wh_util:to_binary(Error), 500, Reason, Context)
@@ -311,7 +312,8 @@ find_camel_cdrs(CdrList, Context) when is_list(CdrList) ->
 %% Call camel_cdr:get_id(CallId)
 %% Merge results.
 -spec find_camel_cdr(ne_binary(), cb_context:context()) -> cb_context:context().
-find_camel_cdr(CallId, Context) ->
+find_camel_cdr(Context) ->
+    CallId = wh_json:get_binary_value(<<"call_id">>, cb_context:resp_data(Context)),
     try camel_cdr:search([CallId]) of
         [Cdr] ->
             cb_context:set_resp_data(Context, merge_cdr_results(Cdr, cb_context:resp_data(Context)))
@@ -330,9 +332,7 @@ merge_cdr_summary_results(Cdr, Records) when is_list(Records) ->
 
 -spec merge_cdr_results(camel_cdr:camel_cdr(), wh_json:object()) -> wh_json:object().
 merge_cdr_results(Cdr, Record) ->
-    case wh_json:is_json_object(Record) of
-        'true' -> wh_json:merge_jobjs(Cdr, Record);
+    case camel_cdr:is_camel_cdr(Record) of
+        'true' -> wh_json:merge_jobjs(Cdr, camel_cdr:record_to_json(Record));
         'false' -> Cdr
     end.
-
-%% Check that the arrays work with setting resp data (do I need to wrap in JSON_WRAPPER?)
