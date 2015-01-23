@@ -80,8 +80,8 @@ search(CdrIds) ->
 %% Convert a given json object into a record
 %% @end
 %%--------------------------------------------------------------------
-is_camel_cdr(#camel_cdr{}=Cdr)->'true'
-is_camel_cdr(_)->'false'
+is_camel_cdr(#camel_cdr{}=Cdr)->'true';
+is_camel_cdr(_)->'false'.
 
 %% Need to convert parameter names
 -spec json_to_record(api_object()) -> cdr().
