@@ -311,7 +311,7 @@ find_camel_cdrs(CdrList, Context) when is_list(CdrList) ->
 %% Extract call IDs from cdrs, accumulate into list
 %% Call camel_cdr:get_id(CallId)
 %% Merge results.
--spec find_camel_cdr(ne_binary(), cb_context:context()) -> cb_context:context().
+-spec find_camel_cdr(cb_context:context()) -> cb_context:context().
 find_camel_cdr(Context) ->
     CallId = wh_json:get_binary_value(<<"call_id">>, cb_context:resp_data(Context)),
     try camel_cdr:search([CallId]) of
