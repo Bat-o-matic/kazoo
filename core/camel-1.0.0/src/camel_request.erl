@@ -108,7 +108,7 @@ do_request(Method, Path, Body) ->
             camel_util:error_maintenance();
         {ok, Code, _, Response} ->
             verbose_debug("Response:~n~p~n~s~n", [Code, Response]),
-            lager:debug("braintree JSON response(~pms)", [timer:now_diff(erlang:now(), StartTime) div 1000]),
+            lager:debug("camel JSON response(~pms)", [timer:now_diff(erlang:now(), StartTime) div 1000]),
             camel_util:response_from_json(wh_json:decode(Response));
         {error, _R} ->
             verbose_debug("Response:~nerror~n~p~n", [_R]),

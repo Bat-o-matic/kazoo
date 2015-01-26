@@ -125,7 +125,7 @@ record_to_json(Cdr, ToString) ->
             Json
     end.
 
-
+-spec transform_cdr(wh_json:object()) -> wh_json:object().
 transform_cdr(Cdr) ->
     [Called|_] = re:split(wh_json:get_value(<<"CalledStationId">>, Cdr, <<"anonymous">>), "@"),
     [Calling|_] = re:split(wh_json:get_value(<<"CallingStationId">>, Cdr, <<"anonymous">>), "@"),
