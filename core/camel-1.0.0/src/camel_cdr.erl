@@ -133,7 +133,7 @@ transform_cdr(Cdr) ->
              ,{<<"other_party">>, Called}
             ],
     New = lists:foldl(fun({OldK, NewK}, Acc) ->
-                    wh_json:set_value(NewK, wh_json:get_value(OldK, Cdr), Acc) 
+                    wh_json:set_value(NewK, wh_json:get_value(OldK, Cdr), Acc)
                 end, wh_json:from_list(Props), ?CAMEL_CDR_TRANSFORM),
     case re:split(wh_json:get_value(<<"Realm">>, Cdr, <<"conversant.co.nz">>), <<"\.">>) of
         [<<"inbound">>|_] -> wh_json:set_value(<<"call_direction">>, <<"inbound">>, New);

@@ -34,7 +34,7 @@
 -define(CAMEL_CDR_TRANSFORM, [{<<"AcctSessionId">>, <<"call_id">>}
                               ,{<<"AcctStartTime">>, <<"start_time">>}
                               ,{<<"AcctStopTime">>, <<"stop_time">>}
-                              ,{<<"AcctSessionTime">>, <<"duration">>}
+                              ,{<<"AcctSessionTime">>, <<"billing_seconds">>}
                               ,{<<"Price">>, <<"price">>}
                              ]).
 

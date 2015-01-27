@@ -316,7 +316,9 @@ find_camel_cdr(Context) ->
     CallId = wh_json:get_binary_value(<<"call_id">>, cb_context:resp_data(Context)),
     try camel_cdr:search([CallId]) of
         [Cdr] ->
-            cb_context:set_resp_data(Context, merge_cdr_results(Cdr, cb_context:resp_data(Context)))
+            cb_context:set_resp_data(Context, merge_cdr_results(Cdr, cb_context:resp_data(Context)));
+        [] ->
+            Context
     catch
         'throw':{Error, Reason} ->
             crossbar_util:response('error', wh_util:to_binary(Error), 500, Reason, Context)
@@ -331,7 +333,7 @@ merge_cdr_summary_results(Cdr, Records) when is_list(Records) ->
     end.
 
 -spec merge_cdr_results(camel_cdr:camel_cdr(), wh_json:object()) -> wh_json:object().
-merge_cdr_results(Cdr, Record) ->
+merge_cdr_results(Record, Cdr) ->
     case camel_cdr:is_camel_cdr(Record) of
         'true' -> wh_json:merge_jobjs(Cdr, camel_cdr:record_to_json(Record));
         'false' -> Cdr
